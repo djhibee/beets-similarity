@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=78.1.1", "packaging>=24.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beets-similarity"
+version = "0.1.0"
+description = "Persistent local-track similarity using the beets autotagger"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["beets>=2.14.1", "Unidecode>=1.4.0"]
+license = "MIT"
+
+[project.optional-dependencies]
+acoustic = ["pyacoustid>=1.3.1"]
+
+[tool.setuptools.packages.find]
+include = ["beetsplug*"]
+namespaces = true

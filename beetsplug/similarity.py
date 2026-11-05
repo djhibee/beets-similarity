@@ -172,17 +172,19 @@ class SimilarityPlugin(BeetsPlugin):
                     "similarity.acoustic: no"
                 ) from exc
             try:
-                similarity = acoustid.compare_fingerprints(
-                    (first.length, self._fingerprint_bytes(fingerprints[0])),
-                    (second.length, self._fingerprint_bytes(fingerprints[1])),
-                )
+                left = (first.length, self._fingerprint_bytes(fingerprints[0]))
+                right = (second.length, self._fingerprint_bytes(fingerprints[1]))
+                similarities = [
+                    acoustid.compare_fingerprints(left, right),
+                    acoustid.compare_fingerprints(right, left),
+                ]
             except (ValueError, RuntimeError, ZeroDivisionError, chromaprint.FingerprintError) as exc:
                 raise ui.UserError(
                     "Cannot decode saved acoustic fingerprints; regenerate them with chroma"
                 ) from exc
-            if not math.isfinite(similarity) or not 0 <= similarity <= 1:
+            if any(not math.isfinite(s) or not 0 <= s <= 1 for s in similarities):
                 raise ui.UserError("Fingerprint comparison returned an invalid score")
-            return 1.0 - similarity
+            return 1.0 - sum(similarities) / 2
         ids = [i.get("acoustid_id") for i in (first, second)]
         if all(ids):
             return float(ids[0] != ids[1])
@@ -363,7 +365,7 @@ class SimilarityPlugin(BeetsPlugin):
 
     @staticmethod
     def _artists(item):
-        return set(item.get("artists") or [item.artist]) - {""}
+        return (set(item.get("artists") or []) | {item.artist}) - {"", None}
 
     @staticmethod
     def _bare(artist):
@@ -403,7 +405,6 @@ class SimilarityPlugin(BeetsPlugin):
                 "Automatic similarity refresh: up to {} candidate comparisons", estimate
             )
         for first in targets.values():
-            matched = set()
             for second in candidates:
                 if first.id == second.id:
                     continue
@@ -412,18 +413,6 @@ class SimilarityPlugin(BeetsPlugin):
                     continue
                 if self._artist_matches(first, second):
                     store.put(first.id, second.id, self.score(first, second))
-                    matched.add(second.id)
-            # Artist edits must not leave obsolete automatic scores behind.
-            for old in store.neighbors(first.id):
-                other = old["item_b"] if old["item_a"] == first.id else old["item_a"]
-                if other in targets and other < first.id:
-                    continue
-                if other not in matched and not old["manual"]:
-                    with lib.transaction() as tx:
-                        tx.mutate(
-                            "DELETE FROM similarity WHERE item_a=? AND item_b=?",
-                            pair_key(first.id, other),
-                        )
 
     def _database_change(self, lib, model):
         if isinstance(model, Item) and model.id:

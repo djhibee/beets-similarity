@@ -125,8 +125,20 @@ class SimilarityTest(unittest.TestCase):
         with patch.dict("sys.modules", acoustid=fake_acoustid, chromaprint=fake_chromaprint):
             with patch.object(fake_acoustid, "compare_fingerprints", return_value=0.25) as compare:
                 self.assertEqual(self.plugin._acoustic_distance(first, second), 0.75)
-            self.assertEqual(compare.call_args.args[0][1], b"fingerprint-a")
-            self.assertEqual(compare.call_args.args[1][1], b"fingerprint-b")
+            self.assertEqual(compare.call_count, 2)
+            self.assertEqual(compare.call_args_list[0].args[0][1], b"fingerprint-a")
+            self.assertEqual(compare.call_args_list[0].args[1][1], b"fingerprint-b")
+
+    def test_asymmetric_fingerprint_alignment_is_averaged(self):
+        first = self.item(acoustid_fingerprint="a")
+        second = self.item(acoustid_fingerprint="b")
+        fake = types.SimpleNamespace(
+            compare_fingerprints=lambda a, b: 0.8 if a[1] < b[1] else 0.2
+        )
+        fake_chromaprint = types.SimpleNamespace(FingerprintError=type("FPError", (Exception,), {}))
+        with patch.dict("sys.modules", acoustid=fake, chromaprint=fake_chromaprint):
+            self.assertEqual(self.plugin._acoustic_distance(first, second), 0.5)
+            self.assertEqual(self.plugin.score(first, second), self.plugin.score(second, first))
 
     def test_fingerprint_failures_are_actionable(self):
         first = self.item(acoustid_fingerprint="bad")
@@ -277,14 +289,30 @@ class SimilarityTest(unittest.TestCase):
         self.assertIsNone(self.store.get(first.id, other.id))
         self.assertIsNotNone(self.store.get(first.id, collaboration.id))
 
-    def test_artist_edit_removes_stale_scores_but_preserves_manual_choices(self):
+    def test_artist_edit_preserves_out_of_scope_scores_and_manual_choices(self):
         first, second, third = self.item(), self.item(), self.item()
         self.store.put(first.id, second.id, 1)
         self.store.put(first.id, third.id, 1, manual=-1)
         first.artist = "Toto"
         self.plugin.refresh_items(self.lib, [first])
-        self.assertIsNone(self.store.get(first.id, second.id))
+        self.assertEqual(self.store.get(first.id, second.id)["score"], 1)
         self.assertEqual(self.store.get(first.id, third.id)["manual"], -1)
+
+    def test_refresh_preserves_explicit_cross_artist_scores(self):
+        first = self.item()
+        second = self.item(artist="Toto")
+        self.store.put(first.id, second.id, 0.6)
+        first.title = "Updated title"
+        self.plugin.refresh_items(self.lib, [first])
+        self.assertEqual(self.store.get(first.id, second.id)["score"], 0.6)
+
+    def test_singular_artist_edit_is_used_with_populated_plural_artists(self):
+        first = self.item(artist="Old Artist", artists=["Old Artist"])
+        second = self.item(artist="New Artist")
+        first.artist = "New Artist"
+        first.store()
+        self.plugin.refresh_items(self.lib, [first])
+        self.assertIsNotNone(self.store.get(first.id, second.id))
 
     def test_change_queue_import_stage_and_removed_item(self):
         first, second = self.item(), self.item()

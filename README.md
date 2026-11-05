@@ -126,7 +126,8 @@ applied only to this plugin's temporary distance objects.
 With `acoustic: yes`, each comparison includes an acoustic distance component:
 
 1. If both tracks have `acoustid_fingerprint`, compare the saved Chromaprint
-   fingerprints using pyacoustid (even if their AcoustID IDs agree).
+   fingerprints using pyacoustid (even if their AcoustID IDs agree), averaging
+   both alignment directions for symmetry.
 2. Otherwise, if both have `acoustid_id`, use ID equality as acoustic evidence.
 3. If neither source is available for both tracks, use
    `missing_acoustic_penalty` and warn once per plugin instance.
@@ -148,13 +149,15 @@ For long-running integrations, call `refresh_items(lib, items)` explicitly.
 Deleted items have their incident pairs removed.
 
 By default, artist names match case-insensitively and exactly. Multi-artist
-tracks match any shared artist. `fuzzy_artists` additionally uses beets' string
+tracks match any shared artist, considering both `artist` and `artists`.
+`fuzzy_artists` additionally uses beets' string
 distance with the maximum `artist_threshold`; `bare_ascii_artists` additionally
 compares transliterated, case-folded names with punctuation/whitespace removed.
 When both modes are enabled, their results are unioned by item ID, so a pair is
 scored once per refresh batch. Tracks with no artist do not match all other
-unknown-artist tracks. After artist edits, obsolete nonmanual pairs are removed;
-manual decisions remain. Automatic refreshes intentionally replace computed
+unknown-artist tracks. Pairs outside the current artist scope are left untouched,
+including explicitly computed cross-artist pairs; use `--add` to refresh those
+or `--remove` to discard them. Automatic refreshes intentionally replace computed
 scores without interactive prompts, but never replace manual choices.
 
 ## Performance and storage

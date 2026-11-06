@@ -26,6 +26,7 @@ class SimilarityTest(unittest.TestCase):
             {
                 "auto": False,
                 "refresh_state": True,
+                "remove_on_delete": False,
                 "threshold": 0.8,
                 "acoustic": True,
                 "dissociate_penalty": "to-zero",
@@ -445,7 +446,35 @@ class SimilarityTest(unittest.TestCase):
             self.plugin._import_stage(types.SimpleNamespace(lib=self.lib), task)
             self.plugin._flush()
         self.assertEqual(score.call_count, 1)
-        self.plugin._item_removed(first)
+        self.plugin.config["remove_on_delete"] = True
+        with patch.object(self.plugin, "_confirm", return_value=True):
+            self.plugin._item_removed(first)
+        self.assertEqual(self.store.neighbors(second.id), [])
+
+    def test_removed_item_pair_cleanup_is_opt_in_and_confirmed(self):
+        first = self.item(title="Deleted track")
+        second = self.item(title="Neighbor track")
+        self.store.put(first.id, second.id, 0.9)
+
+        with patch.object(self.plugin, "_confirm") as confirm:
+            self.plugin._item_removed(first)
+        confirm.assert_not_called()
+        self.assertIsNotNone(self.store.get(first.id, second.id))
+
+        self.plugin.config["remove_on_delete"] = True
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch.object(
+            self.plugin, "_confirm", return_value=False
+        ) as confirm:
+            self.plugin._item_removed(first)
+        confirm.assert_called_once_with("Remove these similarity pairs?")
+        self.assertIn(f"{first.id} (Daft Punk - Deleted track)", output.getvalue())
+        self.assertIn(f"{second.id} (Daft Punk - Neighbor track)", output.getvalue())
+        self.assertIsNotNone(self.store.get(first.id, second.id))
+
+        with patch.object(self.plugin, "_confirm", return_value=True) as confirm:
+            self.plugin._item_removed(first)
+        confirm.assert_called_once()
         self.assertEqual(self.store.neighbors(second.id), [])
 
     def test_database_change_ignores_unrelated_metadata(self):

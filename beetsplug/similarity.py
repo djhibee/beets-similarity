@@ -175,6 +175,7 @@ class SimilarityPlugin(BeetsPlugin):
             {
                 "auto": False,
                 "refresh_state": True,
+                "remove_on_delete": False,
                 "threshold": 0.8,
                 "acoustic": True,
                 "dissociate_penalty": "to-zero",
@@ -580,5 +581,27 @@ class SimilarityPlugin(BeetsPlugin):
         self._flush(session.lib)
 
     def _item_removed(self, item):
-        if item.id:
-            SimilarityStore(item.db).remove([item.id])
+        if not item.id or not self.config["remove_on_delete"].get(bool):
+            return
+        store = SimilarityStore(item.db)
+        rows = store.neighbors(item.id)
+        if not rows:
+            return
+        ui.print_("Similarity pairs touching the deleted item:")
+        for row in sorted(
+            rows,
+            key=lambda pair: pair["item_b"] if pair["item_a"] == item.id
+            else pair["item_a"],
+        ):
+            other_id = (
+                row["item_b"] if row["item_a"] == item.id else row["item_a"]
+            )
+            other = item.db.get_item(other_id)
+            other_label = (
+                f"{other_id} ({other.artist} - {other.title})"
+                if other is not None
+                else str(other_id)
+            )
+            ui.print_(f"  {item.id} ({item.artist} - {item.title}) <-> {other_label}")
+        if self._confirm("Remove these similarity pairs?"):
+            store.remove([item.id])

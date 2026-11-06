@@ -55,9 +55,10 @@ directional autotagger distances averaged to make it symmetric. This resolves
 the distance/similarity ambiguity in the original proposal: `--thres` is a
 **minimum similarity**, not a maximum distance. It must be in `(0, 1]`.
 
-To explain a computed score, enable beets' verbose logging and recompute the
-pair's scope, for example `beet -v similar --add -f artist:"Daft Punk"`.
-Debug logs show each directional distance (raw penalty / total applicable
+To explain a computed score, use beets' `-vvv` verbosity and recompute the
+pair's scope, for example `beet -vvv similar --add -f artist:"Daft Punk"`.
+With `-v` or `-vv`, only the usual pair score is logged, without the breakdown.
+At verbosity three or higher, debug logs show each directional distance (raw penalty / total applicable
 weight), then its nonzero penalties, largest first: compared metadata values,
 configured weight, normalized distance, and the amount subtracted from the
 final similarity. Each directional contribution is divided by two, so all

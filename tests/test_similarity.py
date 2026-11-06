@@ -22,6 +22,9 @@ from beetsplug.similarity import (
 
 class SimilarityTest(unittest.TestCase):
     def setUp(self):
+        verbose = config["verbose"].get(int)
+        self.addCleanup(config["verbose"].set, verbose)
+        config["verbose"] = 0
         config["similarity"].set(
             {
                 "auto": False,
@@ -121,6 +124,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(info.call_args.args[1:], (3, 3))
 
     def test_debug_penalties_explain_final_score(self):
+        config["verbose"] = 3
         first = self.item(mb_trackid="recording", mb_releasegroupid="group-one")
         second = self.item(
             title="Another Track", artist="Other Artist", length=80,
@@ -152,6 +156,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertAlmostEqual(score, 1 - (summary[4] + summary[5]) / 2)
 
     def test_debug_omits_zero_weight_and_missing_evidence(self):
+        config["verbose"] = 3
         first = self.item(acoustid_id="")
         second = self.item(acoustid_id="", title="Other title")
         self.plugin.config["weights"]["track_title"] = 0
@@ -166,6 +171,7 @@ class SimilarityTest(unittest.TestCase):
         ))
 
     def test_debug_fingerprint_evidence_without_dumping_fingerprints(self):
+        config["verbose"] = 3
         first = self.item(acoustid_fingerprint="fingerprint-a")
         second = self.item(acoustid_fingerprint="fingerprint-b")
         with (
@@ -180,6 +186,28 @@ class SimilarityTest(unittest.TestCase):
         self.assertTrue(any("saved fingerprints" in message for message in messages))
         self.assertFalse(any("fingerprint-a" in message for message in messages))
         self.assertFalse(any("fingerprint-b" in message for message in messages))
+
+    def test_detailed_debug_requires_triple_verbosity(self):
+        first, second = self.item(), self.item(title="Other title")
+        for verbosity in range(5):
+            with self.subTest(verbosity=verbosity):
+                config["verbose"] = verbosity
+                with (
+                    patch.object(self.plugin._log, "isEnabledFor", return_value=True),
+                    patch.object(self.plugin._log, "debug") as debug,
+                ):
+                    self.plugin.score(first, second)
+                messages = [
+                    call.args[0].format(*call.args[1:])
+                    for call in debug.call_args_list
+                ]
+                if verbosity < 3:
+                    self.assertEqual(len(messages), 1)
+                    self.assertNotIn(" = 1 - ", messages[0])
+                else:
+                    self.assertTrue(any("Similarity distance" in m for m in messages))
+                    self.assertTrue(any("Similarity penalty" in m for m in messages))
+                    self.assertIn(" = 1 - ", messages[-1])
 
     def test_release_group_and_album_penalties(self):
         first = self.item(mb_releasegroupid="group-one")

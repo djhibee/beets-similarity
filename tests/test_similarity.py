@@ -231,9 +231,12 @@ class SimilarityTest(unittest.TestCase):
         self.assertIn(f"{third.id}:\t\n", output)
         self.assertNotIn("(0.200000)", output)
         matrix = self.command("--list", "--matrix").splitlines()
-        self.assertEqual(matrix[0], f"\t{first.id}\t{second.id}\t{third.id}")
-        self.assertEqual(matrix[1], f"{first.id}\t1.000000\t0.900000\t0.200000")
-        self.assertEqual(matrix[2], f"{second.id}\t0.900000\t1.000000\t-")
+        rows = [line.split() for line in matrix]
+        self.assertEqual(rows[0], [str(first.id), str(second.id), str(third.id)])
+        self.assertEqual(rows[1], [str(first.id), "1.000000", "0.900000", "0.200000"])
+        self.assertEqual(rows[2], [str(second.id), "0.900000", "1.000000", "-"])
+        self.assertEqual(rows[3], [str(third.id), "0.200000", "-", "1.000000"])
+        self.assertNotIn("\t", matrix[0])
 
     def test_debug_paths_are_short_and_single_line(self):
         self.item(path=b"/music/Daft Punk/Homework/song\tname\n.flac")

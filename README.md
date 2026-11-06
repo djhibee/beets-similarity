@@ -70,9 +70,9 @@ six decimal places. Only neighbors **inside the query** appear. Warnings and
 prompts use beets' usual logging/UI channels; use a scoped query and `--force`
 for noninteractive computation.
 
-`--matrix` displays all stored scores in the selected square, without threshold
-filtering. It is tab-separated, symmetric, and uses `1.000000` for the
-self-similarity diagonal and `-` for an **uncomputed** pair (not zero).
+`--matrix` displays all stored scores in an aligned, symmetric square, without
+threshold filtering. It uses `1.000000` for the self-similarity diagonal and
+`-` for an **uncomputed** pair (not zero).
 `--debug` replaces IDs with the final two directories and filename; tabs and
 newlines in paths are escaped. Use IDs, not debug paths, for script integration.
 

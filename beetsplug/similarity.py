@@ -1,7 +1,6 @@
 """Compare local tracks without changing the global autotagger configuration."""
 
 import hashlib
-import inspect
 import itertools
 import json
 import math
@@ -14,14 +13,6 @@ from beets.autotag.hooks import TrackInfo
 from beets.library import Item
 from beets.plugins import BeetsPlugin
 from unidecode import unidecode
-
-
-def colorize(color, text):
-    """Call ui.colorize across beets versions with differing argument order."""
-    params = list(inspect.signature(ui.colorize).parameters)
-    if params and params[0] == "color_name":
-        return ui.colorize(color, text)
-    return ui.colorize(text, color)
 
 
 DEFAULT_WEIGHTS = {
@@ -495,8 +486,10 @@ class SimilarityPlugin(BeetsPlugin):
                 if debug:
                     ui.print_(labels[item.id] + ":")
                     for other, score in sorted(scores.items()):
-                        color = "green" if score >= threshold else "red"
-                        formatted_score = colorize(color, f"({score:.6f})")
+                        color = (
+                            "text_success" if score >= threshold else "text_error"
+                        )
+                        formatted_score = ui.colorize(color, f"({score:.6f})")
                         ui.print_(f"\t\t{labels[other]}\t\t{formatted_score}")
                 else:
                     cells = [

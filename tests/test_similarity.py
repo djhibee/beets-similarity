@@ -366,15 +366,47 @@ class SimilarityTest(unittest.TestCase):
         self.store.put(first.id, above.id, 1)
         self.store.put(first.id, below.id, 0.7)
         with patch.object(
-            ui, "colorize", side_effect=lambda text, color: f"[{color}]{text}"
+            ui,
+            "colorize",
+            autospec=True,
+            side_effect=lambda color_name, text: f"[{color_name}]{text}",
         ):
             output = self.command("--list", "--debug")
 
         self.assertIn(
-            "Music/album1/toto.flac:\n\t\tMusic/album1/toto.mp3\t\t[green](1.000000)",
+            "Music/album1/toto.flac:\n\t\tMusic/album1/toto.mp3\t\t[text_success](1.000000)",
             output,
         )
-        self.assertIn("\t\tMusic/album2/toto.flac\t\t[red](0.700000)", output)
+        self.assertIn("\t\tMusic/album2/toto.flac\t\t[text_error](0.700000)", output)
+
+    def test_debug_list_uses_beets_color_configuration(self):
+        first = self.item(path="album1/toto.flac")
+        above = self.item(path="album1/toto.mp3")
+        below = self.item(path="album2/toto.flac")
+        self.store.put(first.id, above.id, 0.8)
+        self.store.put(first.id, below.id, 0.7)
+        original_color = config["ui"]["color"].get()
+        self.addCleanup(config["ui"]["color"].set, original_color)
+
+        with patch.dict(os.environ):
+            os.environ.pop("NO_COLOR", None)
+            for enabled in (True, False):
+                with self.subTest(color=enabled):
+                    config["ui"]["color"] = enabled
+                    output = self.command("--list", "--debug")
+                    for name, score in (
+                        ("text_success", "0.800000"),
+                        ("text_error", "0.700000"),
+                    ):
+                        self.assertIn(ui.colorize(name, f"({score})"), output)
+                    self.assertEqual("\x1b[" in output, enabled)
+
+            config["ui"]["color"] = True
+            os.environ["NO_COLOR"] = "1"
+            output = self.command("--list", "--debug")
+            self.assertIn("(0.800000)", output)
+            self.assertIn("(0.700000)", output)
+            self.assertNotIn("\x1b[", output)
 
     def test_scoped_remove_and_reset_confirmation_even_with_force(self):
         first, second = self.item(), self.item(artist="Toto")

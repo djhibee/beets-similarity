@@ -482,20 +482,22 @@ class SimilarityPlugin(BeetsPlugin):
                 for row in store.neighbors(item.id):
                     other = row["item_b"] if row["item_a"] == item.id else row["item_a"]
                     if other in labels:
-                        scores[other] = effective_score(row, penalty)
+                        score = effective_score(row, penalty)
+                        if score >= threshold:
+                            scores[other] = score
                 if debug:
                     ui.print_(labels[item.id] + ":")
-                    for other, score in sorted(scores.items()):
-                        color = (
-                            "text_success" if score >= threshold else "text_error"
-                        )
-                        formatted_score = ui.colorize(color, f"({score:.6f})")
+                    for other, score in sorted(
+                        scores.items(), key=lambda pair: (-pair[1], pair[0])
+                    ):
+                        formatted_score = ui.colorize("text_success", f"({score:.6f})")
                         ui.print_(f"\t\t{labels[other]}\t\t{formatted_score}")
                 else:
                     cells = [
-                        f"{labels[other]}({score:.6f})"
-                        for other, score in sorted(scores.items())
-                        if score >= threshold
+                        f"{labels[other]}{ui.colorize('text_success', f'({score:.6f})')}"
+                        for other, score in sorted(
+                            scores.items(), key=lambda pair: (-pair[1], pair[0])
+                        )
                     ]
                     ui.print_(labels[item.id] + ":\t" + "; ".join(cells))
 

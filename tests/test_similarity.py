@@ -2,6 +2,7 @@ import contextlib
 import io
 import math
 import os
+import sqlite3
 import tempfile
 import types
 import unittest
@@ -197,6 +198,58 @@ class SimilarityTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             pair_key(first.id, first.id)
 
+    def test_storage_size_includes_table_and_index_only(self):
+        empty_size = self.store.storage_size()
+        with self.lib.transaction() as tx:
+            page_size = tx.query("PRAGMA page_size")[0][0]
+            tx.mutate("CREATE TABLE unrelated (payload BLOB)")
+            tx.mutate("INSERT INTO unrelated VALUES (zeroblob(1048576))")
+        self.assertEqual(empty_size, 2 * page_size)
+        self.assertEqual(self.store.storage_size(), empty_size)
+
+        items = [self.item() for _ in range(50)]
+        with self.lib.transaction() as tx:
+            for first in items:
+                for second in items:
+                    if first.id < second.id:
+                        self.store.put(first.id, second.id, 0.9)
+        with self.lib.transaction() as tx:
+            expected = sum(
+                row["size"] for row in tx.query(
+                    "SELECT SUM(pgsize) AS size FROM dbstat "
+                    "WHERE name IN ('similarity', 'similarity_item_b') GROUP BY name"
+                )
+            )
+        self.assertGreater(expected, empty_size)
+        self.assertEqual(self.store.storage_size(), expected)
+        with patch.object(self.lib, "items", side_effect=AssertionError):
+            self.assertEqual(
+                self.command("--size"), f"Similarity storage: {expected} bytes\n"
+            )
+        self.assertEqual(len(self.store.neighbors(items[0].id)), 49)
+
+    def test_size_does_not_require_valid_scoring_configuration(self):
+        self.plugin.config["threshold"] = 0
+        self.assertEqual(
+            self.command("--size"),
+            f"Similarity storage: {self.store.storage_size()} bytes\n",
+        )
+
+    def test_storage_size_reports_missing_dbstat(self):
+        with self.lib.transaction() as tx, patch.object(
+            self.lib, "transaction", return_value=contextlib.nullcontext(tx)
+        ):
+            with patch.object(
+                tx, "query", side_effect=sqlite3.OperationalError("no such table: dbstat")
+            ):
+                with self.assertRaisesRegex(ui.UserError, "SQLITE_ENABLE_DBSTAT_VTAB"):
+                    self.store.storage_size()
+            with patch.object(
+                tx, "query", side_effect=sqlite3.OperationalError("database is locked")
+            ):
+                with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                    self.store.storage_size()
+
     def test_manual_choices_survive_refresh_and_threshold_changes(self):
         first, second = self.item(), self.item()
         self.command("--associate", str(first.id), str(second.id))
@@ -310,6 +363,11 @@ class SimilarityTest(unittest.TestCase):
         for args in (
             ("--add", "--list"),
             ("--add", "--matrix"),
+            ("--size", "--list"),
+            ("--size", "--matrix"),
+            ("--size", "--debug"),
+            ("--size", "artist:Daft Punk"),
+            ("--size", "--thres", "0.8"),
             ("--associate", str(first.id), str(first.id)),
             ("--associate", str(first.id), "999"),
             ("--associate", str(first.id), "999", "artist:Daft Punk"),

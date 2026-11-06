@@ -3,6 +3,7 @@
 import itertools
 import math
 import os
+import sqlite3
 
 from beets import ui
 from beets.autotag import match
@@ -88,6 +89,25 @@ class SimilarityStore:
                 "SELECT * FROM similarity WHERE item_a=? OR item_b=?",
                 (item_id, item_id),
             )
+
+    def storage_size(self):
+        """Allocated SQLite page bytes for the similarity table and its indexes."""
+        with self.lib.transaction() as tx:
+            try:
+                rows = tx.query(
+                    "SELECT COALESCE(SUM(pgsize), 0) AS size FROM dbstat "
+                    "WHERE name='similarity' OR name IN "
+                    "(SELECT name FROM sqlite_schema "
+                    "WHERE type='index' AND tbl_name='similarity')"
+                )
+            except sqlite3.OperationalError as exc:
+                if "no such table: dbstat" not in str(exc):
+                    raise
+                raise ui.UserError(
+                    "Cannot measure similarity storage: this SQLite build "
+                    "does not support dbstat (SQLITE_ENABLE_DBSTAT_VTAB)"
+                ) from exc
+        return rows[0]["size"]
 
     def remove(self, ids=None):
         with self.lib.transaction() as tx:
@@ -292,6 +312,10 @@ class SimilarityPlugin(BeetsPlugin):
         parser = command.parser
         for action in ("add", "list", "remove"):
             parser.add_option(f"--{action}", action="store_true", default=False)
+        parser.add_option(
+            "--size", action="store_true", default=False,
+            help="display similarity table and index storage in bytes",
+        )
         for action in ("associate", "dissociate"):
             parser.add_option(f"--{action}", nargs=2, type="int", metavar="ID ID")
         parser.add_option("-f", "--force", action="store_true", default=False)
@@ -303,15 +327,20 @@ class SimilarityPlugin(BeetsPlugin):
 
     def _command(self, lib, opts, args):
         actions = [
-            name for name in ("add", "list", "remove", "associate", "dissociate")
+            name for name in ("add", "list", "remove", "associate", "dissociate", "size")
             if getattr(opts, name)
         ]
         if len(actions) > 1:
             raise ui.UserError("Choose only one similar action")
         action = actions[0] if actions else "list"
-        threshold = self._threshold(opts.thres)
         if (opts.matrix or opts.debug) and action != "list":
             raise ui.UserError("--matrix and --debug require --list")
+        if action == "size":
+            if args or opts.thres is not None:
+                raise ui.UserError("--size does not accept a query or --thres")
+            ui.print_(f"Similarity storage: {SimilarityStore(lib).storage_size()} bytes")
+            return
+        threshold = self._threshold(opts.thres)
         store = SimilarityStore(lib)
         if action in ("associate", "dissociate"):
             if args:

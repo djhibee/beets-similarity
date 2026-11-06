@@ -8,7 +8,7 @@ import math
 import os
 import sqlite3
 
-from beets import ui
+from beets import config, ui
 from beets.autotag import match
 from beets.autotag.hooks import TrackInfo
 from beets.library import Item
@@ -287,7 +287,7 @@ class SimilarityPlugin(BeetsPlugin):
         return value.encode("ascii") if isinstance(value, str) else value
 
     def _log_distance(self, source, target, dist, weights):
-        if not self._log.isEnabledFor(logging.DEBUG):
+        if config["verbose"].get(int) < 3 or not self._log.isEnabledFor(logging.DEBUG):
             return
         self._log.debug(
             "Similarity distance {} -> {}: raw penalty {} / total weight {}"
@@ -356,10 +356,15 @@ class SimilarityPlugin(BeetsPlugin):
             distances.append(float(dist))
             self._log_distance(source, target, dist, weights)
         score = max(0.0, min(1.0, 1.0 - sum(distances) / 2))
-        self._log.debug(
-            "Similarity score for items {} and {}: {} = 1 - ({} + {}) / 2",
-            first.id, second.id, score, *distances,
-        )
+        if config["verbose"].get(int) >= 3:
+            self._log.debug(
+                "Similarity score for items {} and {}: {} = 1 - ({} + {}) / 2",
+                first.id, second.id, score, *distances,
+            )
+        else:
+            self._log.debug(
+                "Similarity score for items {} and {}: {}", first.id, second.id, score
+            )
         return score
 
     def similar_items(self, lib, item, threshold=None):

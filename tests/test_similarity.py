@@ -95,6 +95,24 @@ class SimilarityTest(unittest.TestCase):
         self.assertLess(self.plugin.score(first, second), default)
         self.assertEqual(config["match"].get(), before)
 
+    def test_scoring_logs_pair_scores_and_bulk_progress(self):
+        first, second, third = self.item(), self.item(), self.item()
+        with patch.object(self.plugin._log, "debug") as debug:
+            self.plugin.score(first, second)
+        debug.assert_called_once()
+        self.assertIn("Similarity score", debug.call_args.args[0])
+        self.assertEqual(debug.call_args.args[1:3], (first.id, second.id))
+
+        with patch.object(self.plugin._log, "info") as info:
+            self.command("--add", "-f", "artist:Daft Punk")
+        self.assertEqual(info.call_count, 4)
+        self.assertEqual(
+            [call.args[1:] for call in info.call_args_list[:3]],
+            [(1, 3), (2, 3), (3, 3)],
+        )
+        self.assertIn("complete", info.call_args.args[0])
+        self.assertEqual(info.call_args.args[1:], (3, 3))
+
     def test_release_group_and_album_penalties(self):
         first = self.item(mb_releasegroupid="group-one")
         same = self.item(mb_releasegroupid="group-one")

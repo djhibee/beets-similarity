@@ -223,7 +223,11 @@ class SimilarityPlugin(BeetsPlugin):
             if not dist.max_distance:
                 raise ui.UserError("Enable at least one applicable similarity weight")
             distances.append(float(dist))
-        return max(0.0, min(1.0, 1.0 - sum(distances) / 2))
+        score = max(0.0, min(1.0, 1.0 - sum(distances) / 2))
+        self._log.debug(
+            "Similarity score for items {} and {}: {}", first.id, second.id, score
+        )
+        return score
 
     def similar_items(self, lib, item, threshold=None):
         """Public API for rating/playlist plugins: (Item, score), best first."""
@@ -308,8 +312,17 @@ class SimilarityPlugin(BeetsPlugin):
             )
             if existing and not opts.force and not self._confirm("Refresh existing scores?"):
                 return
-            for first, second in itertools.combinations(items, 2):
+            total = count * (count - 1) // 2
+            for progress, (first, second) in enumerate(
+                itertools.combinations(items, 2), 1
+            ):
                 store.put(first.id, second.id, self.score(first, second))
+                self._log.info(
+                    "Similarity progress: {}/{} pairs scored", progress, total
+                )
+            self._log.info(
+                "Similarity complete: scored {} pairs across {} tracks", total, count
+            )
         elif action == "remove":
             if not args:
                 # Reset is destructive even when --force was supplied.

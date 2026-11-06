@@ -340,7 +340,8 @@ class SimilarityTest(unittest.TestCase):
         first, second, third = self.item(), self.item(), self.item()
         self.store.put(first.id, second.id, 0.9)
         self.store.put(first.id, third.id, 0.2)
-        output = self.command("--list", "--thres", "0.8")
+        with patch.object(ui, "colorize", autospec=True, side_effect=lambda _, text: text):
+            output = self.command("--list", "--thres", "0.8")
         self.assertIn(f"{first.id}:\t{second.id}(0.900000)", output)
         self.assertIn(f"{third.id}:\t\n", output)
         self.assertNotIn("(0.200000)", output)
@@ -352,6 +353,32 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(rows[3], [str(third.id), "0.200000", "-", "1.000000"])
         self.assertNotIn("\t", matrix[0])
 
+    def test_non_matrix_lists_order_neighbors_by_effective_score(self):
+        first = self.item(path="album/first.flac")
+        lower = self.item(path="album/lower.flac")
+        higher = self.item(path="album/higher.flac")
+        self.store.put(first.id, lower.id, 0.85)
+        self.store.put(first.id, higher.id, 0.95)
+
+        with patch.object(
+            ui,
+            "colorize",
+            autospec=True,
+            side_effect=lambda color_name, text: f"[{color_name}]{text}",
+        ):
+            regular = self.command("--list")
+        debug = self.command("--list", "--debug")
+
+        self.assertIn(
+            f"{first.id}:\t{higher.id}[text_success](0.950000); "
+            f"{lower.id}[text_success](0.850000)",
+            regular,
+        )
+        self.assertLess(
+            debug.index("Music/album/higher.flac"),
+            debug.index("Music/album/lower.flac"),
+        )
+
     def test_debug_paths_are_short_and_single_line(self):
         self.item(path=b"/music/Daft Punk/Homework/song\tname\n.flac")
         self.assertEqual(
@@ -359,7 +386,7 @@ class SimilarityTest(unittest.TestCase):
             "Daft Punk/Homework/song\\tname\\n.flac:\n",
         )
 
-    def test_debug_list_indents_pairs_and_colors_by_threshold(self):
+    def test_debug_list_indents_pairs_and_filters_by_threshold(self):
         first = self.item(path="album1/toto.flac")
         above = self.item(path="album1/toto.mp3")
         below = self.item(path="album2/toto.flac")
@@ -377,7 +404,25 @@ class SimilarityTest(unittest.TestCase):
             "Music/album1/toto.flac:\n\t\tMusic/album1/toto.mp3\t\t[text_success](1.000000)",
             output,
         )
-        self.assertIn("\t\tMusic/album2/toto.flac\t\t[text_error](0.700000)", output)
+        self.assertNotIn("(0.700000)", output)
+        self.assertIn("Music/album2/toto.flac:\n", output)
+
+    def test_debug_list_honors_configured_threshold_and_cli_override(self):
+        first = self.item(path="album1/first.flac")
+        second = self.item(path="album1/second.flac")
+        self.store.put(first.id, second.id, 0.7)
+        self.plugin.config["threshold"] = 0.7
+
+        for args, included in (
+            ((), True),
+            (("--thres", "0.8"), False),
+            (("--thres", "0.6"), True),
+        ):
+            with self.subTest(args=args):
+                output = self.command("--list", "--debug", *args)
+                self.assertEqual("(0.700000)" in output, included)
+                self.assertIn("Music/album1/first.flac:\n", output)
+                self.assertIn("Music/album1/second.flac:\n", output)
 
     def test_debug_list_uses_beets_color_configuration(self):
         first = self.item(path="album1/toto.flac")
@@ -394,18 +439,17 @@ class SimilarityTest(unittest.TestCase):
                 with self.subTest(color=enabled):
                     config["ui"]["color"] = enabled
                     output = self.command("--list", "--debug")
-                    for name, score in (
-                        ("text_success", "0.800000"),
-                        ("text_error", "0.700000"),
-                    ):
-                        self.assertIn(ui.colorize(name, f"({score})"), output)
+                    self.assertIn(
+                        ui.colorize("text_success", "(0.800000)"), output
+                    )
+                    self.assertNotIn("(0.700000)", output)
                     self.assertEqual("\x1b[" in output, enabled)
 
             config["ui"]["color"] = True
             os.environ["NO_COLOR"] = "1"
             output = self.command("--list", "--debug")
             self.assertIn("(0.800000)", output)
-            self.assertIn("(0.700000)", output)
+            self.assertNotIn("(0.700000)", output)
             self.assertNotIn("\x1b[", output)
 
     def test_scoped_remove_and_reset_confirmation_even_with_force(self):

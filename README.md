@@ -78,10 +78,11 @@ newlines in paths are escaped. Use IDs, not debug paths, for script integration.
 
 ### Manual decisions
 
-Associating a pair adds the bonus needed to reach similarity `1`; dissociating
-adds the penalty needed to reach `0`. The base computed score is retained.
-These decisions survive refreshes and keep the pair above/below any valid
-threshold, respectively. They are symmetric and require two existing,
+Associating a pair adds the bonus needed to reach similarity `1`. Dissociating
+subtracts `dissociate_penalty` from the base score, with a floor of `0`; the
+base computed score is retained. The default `to-zero` value uses the base score
+itself as the penalty, preserving the previous behavior. These decisions
+survive refreshes and are symmetric; manual operations require two existing,
 distinct item IDs.
 
 ## Configuration
@@ -93,6 +94,7 @@ similarity:
   auto: no
   threshold: 0.8
   acoustic: yes
+  dissociate_penalty: to-zero
   warn_items: 1000
   warn_pairs: 500000
   fuzzy_artists: no
@@ -203,7 +205,10 @@ computing new ones. Consumers control rating prompts, asynchronous review, and
 quality tie-breaking; this plugin deliberately does not change ratings/playlists.
 The `similarity` SQL table stores `item_a < item_b`, base `score`, and `manual`
 (`-1` dissociated, `0` automatic, `1` associated); effective similarity is
-`0`/`1` for manual choices and `score` otherwise.
+`1` for associated pairs, `max(0, score - dissociate_penalty)` for dissociated
+pairs, and `score` otherwise. Set `dissociate_penalty` to a number in `[0, 1]`
+to subtract a fixed penalty, or `to-zero` to use each pair's base score as the
+penalty and force its effective score to `0`.
 
 ## Tests
 

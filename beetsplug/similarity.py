@@ -33,10 +33,13 @@ def pair_key(first, second):
     return tuple(sorted((int(first), int(second))))
 
 
-def effective_score(row):
+def effective_score(row, dissociate_penalty="to-zero"):
     """Manual choices survive recomputation and any valid threshold change."""
     if row["manual"]:
-        return 1.0 if row["manual"] > 0 else 0.0
+        if row["manual"] > 0:
+            return 1.0
+        penalty = row["score"] if dissociate_penalty == "to-zero" else dissociate_penalty
+        return max(0.0, row["score"] - penalty)
     return row["score"]
 
 
@@ -106,6 +109,7 @@ class SimilarityPlugin(BeetsPlugin):
                 "auto": False,
                 "threshold": 0.8,
                 "acoustic": True,
+                "dissociate_penalty": "to-zero",
                 "weights": DEFAULT_WEIGHTS,
                 "warn_items": 1000,
                 "warn_pairs": 500000,
@@ -132,6 +136,26 @@ class SimilarityPlugin(BeetsPlugin):
         if not math.isfinite(value) or not 0 < value <= 1:
             raise ui.UserError("similarity threshold must be greater than 0 and at most 1")
         return value
+
+    def _dissociate_penalty(self):
+        value = self.config["dissociate_penalty"].get()
+        if value == "to-zero":
+            return value
+        if isinstance(value, (str, bool)):
+            raise ui.UserError(
+                'similarity.dissociate_penalty must be a number in [0, 1] or "to-zero"'
+            )
+        try:
+            penalty = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ui.UserError(
+                'similarity.dissociate_penalty must be a number in [0, 1] or "to-zero"'
+            ) from exc
+        if not math.isfinite(penalty) or not 0 <= penalty <= 1:
+            raise ui.UserError(
+                'similarity.dissociate_penalty must be a number in [0, 1] or "to-zero"'
+            )
+        return penalty
 
     @staticmethod
     def _virtual(item):
@@ -232,9 +256,10 @@ class SimilarityPlugin(BeetsPlugin):
     def similar_items(self, lib, item, threshold=None):
         """Public API for rating/playlist plugins: (Item, score), best first."""
         threshold = self._threshold(threshold)
+        penalty = self._dissociate_penalty()
         results = []
         for row in SimilarityStore(lib).neighbors(item.id):
-            score = effective_score(row)
+            score = effective_score(row, penalty)
             if score >= threshold:
                 other_id = (
                     row["item_b"] if row["item_a"] == item.id else row["item_a"]
@@ -345,6 +370,7 @@ class SimilarityPlugin(BeetsPlugin):
 
     def _list(self, store, items, threshold, matrix, debug):
         labels = {item.id: self._label(item, debug) for item in items}
+        penalty = self._dissociate_penalty()
         if matrix:
             label_width = max((len(label) for label in labels.values()), default=0)
             column_width = max(8, label_width)
@@ -353,7 +379,7 @@ class SimilarityPlugin(BeetsPlugin):
                 for row in store.neighbors(item.id):
                     other = row["item_b"] if row["item_a"] == item.id else row["item_a"]
                     if other in labels:
-                        score = effective_score(row)
+                        score = effective_score(row, penalty)
                         matrix_scores[item.id][other] = score
                         matrix_scores[other][item.id] = score
             ui.print_(
@@ -378,7 +404,7 @@ class SimilarityPlugin(BeetsPlugin):
                 for row in store.neighbors(item.id):
                     other = row["item_b"] if row["item_a"] == item.id else row["item_a"]
                     if other in labels:
-                        scores[other] = effective_score(row)
+                        scores[other] = effective_score(row, penalty)
                 cells = [
                     f"{labels[other]}({score:.6f})"
                     for other, score in sorted(scores.items())

@@ -26,6 +26,7 @@ class SimilarityTest(unittest.TestCase):
                 "auto": False,
                 "threshold": 0.8,
                 "acoustic": True,
+                "dissociate_penalty": "to-zero",
                 "weights": dict(DEFAULT_WEIGHTS),
                 "warn_items": 1000,
                 "warn_pairs": 500000,
@@ -209,6 +210,33 @@ class SimilarityTest(unittest.TestCase):
         self.store.put(first.id, second.id, 1)
         self.assertEqual(effective_score(self.store.get(first.id, second.id)), 0)
         self.assertEqual(self.plugin.similar_items(self.lib, first, 0.01), [])
+
+    def test_dissociate_penalty_is_configurable_and_preserves_base_score(self):
+        first, second = self.item(), self.item(title="Different")
+        base_score = 0.7
+        self.store.put(first.id, second.id, base_score)
+        self.command("--dissociate", str(first.id), str(second.id), "--force")
+
+        self.plugin.config["dissociate_penalty"] = 0.2
+        row = self.store.get(first.id, second.id)
+        self.assertEqual(row["score"], base_score)
+        self.assertAlmostEqual(effective_score(row, self.plugin._dissociate_penalty()), 0.5)
+        results = self.plugin.similar_items(self.lib, first, threshold=0.4)
+        self.assertEqual([item.id for item, _ in results], [second.id])
+        self.assertAlmostEqual(results[0][1], 0.5)
+
+        self.plugin.config["dissociate_penalty"] = 0.8
+        self.assertEqual(effective_score(row, self.plugin._dissociate_penalty()), 0)
+        self.plugin.config["dissociate_penalty"] = "to-zero"
+        self.assertEqual(effective_score(row, self.plugin._dissociate_penalty()), 0)
+
+    def test_invalid_dissociate_penalty_rejected(self):
+        for value in ("invalid", -0.1, 1.1, math.nan, math.inf, True):
+            self.plugin.config["dissociate_penalty"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ui.UserError, "dissociate_penalty"
+            ):
+                self.plugin._dissociate_penalty()
 
     def test_query_scopes_add_and_overwrite_confirmation(self):
         first, second = self.item(), self.item()

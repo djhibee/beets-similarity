@@ -36,6 +36,7 @@ beet similar --associate 12 34
 beet similar --dissociate 12 34 -f
 beet similar --remove artist:"Toto"
 beet similar --remove                      # full reset, extra confirmation
+beet similar --size                        # similarity table + indexes, in bytes
 ```
 
 `--add` computes every unordered pair **within** the matched query, not against
@@ -161,6 +162,14 @@ or `--remove` to discard them. Automatic refreshes intentionally replace compute
 scores without interactive prompts, but never replace manual choices.
 
 ## Performance and storage
+
+`beet similar --size` reports allocated SQLite page bytes for the `similarity`
+table and all its indexes, not the size of the entire beets database. It accepts
+no query or threshold and does not compute or change scores. Even an empty table
+and index occupy pages. The measurement includes unused space within those
+pages, but excludes database-wide free pages, other tables, and journal/WAL files.
+It requires SQLite's `dbstat` support (`SQLITE_ENABLE_DBSTAT_VTAB`); builds without
+it produce an explicit error.
 
 All-vs-all computation is **O(N²)**: `N * (N - 1) / 2` unordered pairs (two
 directional distance calls per pair). At **50,000 tracks this is 1,249,975,000

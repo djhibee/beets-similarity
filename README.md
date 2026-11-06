@@ -93,6 +93,7 @@ Defaults, all under the `similarity` section:
 similarity:
   auto: no
   refresh_state: yes
+  remove_on_delete: no
   threshold: 0.8
   acoustic: yes
   dissociate_penalty: to-zero
@@ -153,7 +154,8 @@ recorded refresh baseline are refreshed once. Queued changes are refreshed at
 command exit, coalescing repeated stores. For long-running integrations, call
 `refresh_items(lib, items)` explicitly. Set `refresh_state: no` to disable the
 stored signatures and refresh after every item database change.
-Deleted items have their incident pairs removed.
+Set `remove_on_delete: yes` to list and confirm before removing similarity
+pairs that touch a deleted item. This is disabled by default.
 
 By default, artist names match case-insensitively and exactly. Multi-artist
 tracks match any shared artist, considering both `artist` and `artists`.

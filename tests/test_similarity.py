@@ -433,6 +433,24 @@ class SimilarityTest(unittest.TestCase):
         self.plugin._item_removed(first)
         self.assertEqual(self.store.neighbors(second.id), [])
 
+    def test_database_change_ignores_unrelated_metadata(self):
+        first = self.item()
+        self.plugin.refresh_items(self.lib, [first])
+
+        first.composer = "New Composer"
+        first.store()
+        with patch.object(self.plugin, "refresh_items") as refresh:
+            self.plugin._database_change(self.lib, first)
+            self.plugin._flush(self.lib)
+        refresh.assert_not_called()
+
+        first.title = "Updated title"
+        first.store()
+        with patch.object(self.plugin, "refresh_items") as refresh:
+            self.plugin._database_change(self.lib, first)
+            self.plugin._flush(self.lib)
+        refresh.assert_called_once()
+
     def test_auto_is_opt_in_and_registers_stage_and_events(self):
         self.assertEqual(self.plugin.import_stages, [])
         config["similarity"]["auto"] = True

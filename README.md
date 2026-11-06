@@ -144,9 +144,12 @@ unchanged by configuration edits until refreshed.
 
 `auto: yes` adds an import stage to compute imported tracks against local tracks
 sharing their artists. Both album imports and singleton imports are handled as
-individual tracks. Metadata changes reported through beets' `database_change`
-event are queued and refreshed at command exit, coalescing repeated stores.
-For long-running integrations, call `refresh_items(lib, items)` explicitly.
+individual tracks. After an item's first refresh, beets' `database_change`
+event queues it only when similarity-relevant metadata changes; unrelated
+edits such as changing the composer do not trigger a refresh. Items without a
+recorded refresh baseline are refreshed once. Queued changes are refreshed at
+command exit, coalescing repeated stores. For long-running integrations, call
+`refresh_items(lib, items)` explicitly.
 Deleted items have their incident pairs removed.
 
 By default, artist names match case-insensitively and exactly. Multi-artist

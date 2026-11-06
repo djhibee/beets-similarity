@@ -483,12 +483,19 @@ class SimilarityPlugin(BeetsPlugin):
                     other = row["item_b"] if row["item_a"] == item.id else row["item_a"]
                     if other in labels:
                         scores[other] = effective_score(row, penalty)
-                cells = [
-                    f"{labels[other]}({score:.6f})"
-                    for other, score in sorted(scores.items())
-                    if score >= threshold
-                ]
-                ui.print_(labels[item.id] + ":\t" + "; ".join(cells))
+                if debug:
+                    ui.print_(labels[item.id] + ":")
+                    for other, score in sorted(scores.items()):
+                        color = "green" if score >= threshold else "red"
+                        formatted_score = ui.colorize(f"({score:.6f})", color)
+                        ui.print_(f"\t\t{labels[other]}\t\t{formatted_score}")
+                else:
+                    cells = [
+                        f"{labels[other]}({score:.6f})"
+                        for other, score in sorted(scores.items())
+                        if score >= threshold
+                    ]
+                    ui.print_(labels[item.id] + ":\t" + "; ".join(cells))
 
     @staticmethod
     def _artists(item):

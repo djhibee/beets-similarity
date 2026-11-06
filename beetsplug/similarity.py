@@ -341,21 +341,39 @@ class SimilarityPlugin(BeetsPlugin):
     def _list(self, store, items, threshold, matrix, debug):
         labels = {item.id: self._label(item, debug) for item in items}
         if matrix:
-            ui.print_("\t" + "\t".join(labels.values()))
+            label_width = max((len(label) for label in labels.values()), default=0)
+            column_width = max(8, label_width)
+            matrix_scores = {item.id: {} for item in items}
+            for item in items:
+                for row in store.neighbors(item.id):
+                    other = row["item_b"] if row["item_a"] == item.id else row["item_a"]
+                    if other in labels:
+                        score = effective_score(row)
+                        matrix_scores[item.id][other] = score
+                        matrix_scores[other][item.id] = score
+            ui.print_(
+                " " * label_width
+                + "  "
+                + "  ".join(f"{labels[item.id]:>{column_width}}" for item in items)
+            )
         for item in items:
             scores = {}
-            for row in store.neighbors(item.id):
-                other = row["item_b"] if row["item_a"] == item.id else row["item_a"]
-                if other in labels:
-                    scores[other] = effective_score(row)
             if matrix:
-                cells = [
-                    "1.000000" if other.id == item.id
-                    else f"{scores[other.id]:.6f}" if other.id in scores else "-"
-                    for other in items
-                ]
-                ui.print_(labels[item.id] + "\t" + "\t".join(cells))
+                cells = []
+                for other in items:
+                    if other.id == item.id:
+                        value = "1.000000"
+                    elif other.id in matrix_scores[item.id]:
+                        value = f"{matrix_scores[item.id][other.id]:.6f}"
+                    else:
+                        value = "-"
+                    cells.append(f"{value:>{column_width}}")
+                ui.print_(f"{labels[item.id]:<{label_width}}  " + "  ".join(cells))
             else:
+                for row in store.neighbors(item.id):
+                    other = row["item_b"] if row["item_a"] == item.id else row["item_a"]
+                    if other in labels:
+                        scores[other] = effective_score(row)
                 cells = [
                     f"{labels[other]}({score:.6f})"
                     for other, score in sorted(scores.items())

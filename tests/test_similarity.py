@@ -26,7 +26,6 @@ class SimilarityTest(unittest.TestCase):
                 "auto": False,
                 "threshold": 0.8,
                 "acoustic": True,
-                "missing_acoustic_penalty": 0.5,
                 "weights": dict(DEFAULT_WEIGHTS),
                 "warn_items": 1000,
                 "warn_pairs": 500000,
@@ -110,12 +109,12 @@ class SimilarityTest(unittest.TestCase):
         with patch.object(self.plugin, "_acoustic_distance", side_effect=AssertionError):
             self.assertEqual(self.plugin.score(first, second), 1)
 
-    def test_missing_acoustic_evidence_has_explicit_penalty(self):
+    def test_missing_acoustic_evidence_is_omitted(self):
         first, second = self.item(acoustid_id=""), self.item(acoustid_id="")
-        with patch.object(self.plugin._log, "warning") as warning:
-            self.assertLess(self.plugin.score(first, second), 1)
-            self.plugin.score(first, second)
-        warning.assert_called_once()
+        self.assertIsNone(self.plugin._acoustic_distance(first, second))
+        score_with_acoustic_enabled = self.plugin.score(first, second)
+        self.plugin.config["acoustic"] = False
+        self.assertEqual(score_with_acoustic_enabled, self.plugin.score(first, second))
 
     def test_fingerprints_are_compared_even_when_acoustid_ids_agree(self):
         first = self.item(acoustid_fingerprint="fingerprint-a")

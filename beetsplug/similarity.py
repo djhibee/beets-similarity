@@ -106,7 +106,6 @@ class SimilarityPlugin(BeetsPlugin):
                 "auto": False,
                 "threshold": 0.8,
                 "acoustic": True,
-                "missing_acoustic_penalty": 0.5,
                 "weights": DEFAULT_WEIGHTS,
                 "warn_items": 1000,
                 "warn_pairs": 500000,
@@ -116,7 +115,6 @@ class SimilarityPlugin(BeetsPlugin):
             }
         )
         self._pending = {}
-        self._warned_missing = False
         self.register_listener("item_removed", self._item_removed)
         if self.config["auto"].get(bool):
             self.import_stages.append(self._import_stage)
@@ -188,13 +186,7 @@ class SimilarityPlugin(BeetsPlugin):
         ids = [i.get("acoustid_id") for i in (first, second)]
         if all(ids):
             return float(ids[0] != ids[1])
-        if not self._warned_missing:
-            self._log.warning(
-                "Missing acoustic evidence; using missing_acoustic_penalty. "
-                "Populate fingerprints/AcoustID IDs with chroma for acoustic matching."
-            )
-            self._warned_missing = True
-        return self._number("missing_acoustic_penalty")
+        return None
 
     @staticmethod
     def _fingerprint_bytes(value):

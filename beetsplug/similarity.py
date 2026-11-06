@@ -1,6 +1,8 @@
 """Compare local tracks without changing the global autotagger configuration."""
 
+import hashlib
 import itertools
+import json
 import math
 import os
 import sqlite3
@@ -26,6 +28,19 @@ DEFAULT_WEIGHTS = {
     "data_source": 0.0,
 }
 
+REFRESH_FIELDS = (
+    "title",
+    "artist",
+    "artists",
+    "length",
+    "track",
+    "disc",
+    "mb_trackid",
+    "album",
+    "mb_releasegroupid",
+)
+ACOUSTIC_REFRESH_FIELDS = ("acoustid_id", "acoustid_fingerprint")
+
 
 def pair_key(first, second):
     """Canonical key for a non-self, persisted pair."""
@@ -47,7 +62,7 @@ def effective_score(row, dissociate_penalty="to-zero"):
 class SimilarityStore:
     """Sparse, undirected pairs in the same SQLite database as beets."""
 
-    def __init__(self, lib):
+    def __init__(self, lib, refresh_state=False):
         self.lib = lib
         with lib.transaction() as tx:
             tx.mutate(
@@ -61,6 +76,13 @@ class SimilarityStore:
             tx.mutate(
                 "CREATE INDEX IF NOT EXISTS similarity_item_b ON similarity(item_b)"
             )
+            if refresh_state:
+                tx.mutate(
+                    "CREATE TABLE IF NOT EXISTS similarity_refresh_state ("
+                    "item_id INTEGER PRIMARY KEY "
+                    "REFERENCES items(id) ON DELETE CASCADE, "
+                    "signature TEXT NOT NULL)"
+                )
 
     def get(self, first, second):
         key = pair_key(first, second)
@@ -90,15 +112,31 @@ class SimilarityStore:
                 (item_id, item_id),
             )
 
+    def refresh_signature(self, item_id):
+        with self.lib.transaction() as tx:
+            rows = tx.query(
+                "SELECT signature FROM similarity_refresh_state WHERE item_id=?",
+                (item_id,),
+            )
+        return rows[0]["signature"] if rows else None
+
+    def set_refresh_signature(self, item_id, signature):
+        with self.lib.transaction() as tx:
+            tx.mutate(
+                "INSERT INTO similarity_refresh_state(item_id, signature) "
+                "VALUES (?, ?) ON CONFLICT(item_id) "
+                "DO UPDATE SET signature=excluded.signature",
+                (item_id, signature),
+            )
+
     def storage_size(self):
         """Allocated SQLite page bytes for the similarity table and its indexes."""
         with self.lib.transaction() as tx:
             try:
                 rows = tx.query(
                     "SELECT COALESCE(SUM(pgsize), 0) AS size FROM dbstat "
-                    "WHERE name='similarity' OR name IN "
-                    "(SELECT name FROM sqlite_schema "
-                    "WHERE type='index' AND tbl_name='similarity')"
+                    "WHERE name IN ('similarity', 'similarity_item_b', "
+                    "'similarity_refresh_state')"
                 )
             except sqlite3.OperationalError as exc:
                 if "no such table: dbstat" not in str(exc):
@@ -114,11 +152,20 @@ class SimilarityStore:
             if ids is None:
                 tx.mutate("DELETE FROM similarity")
             else:
+                has_refresh_state = tx.query(
+                    "SELECT 1 FROM sqlite_schema "
+                    "WHERE type='table' AND name='similarity_refresh_state'"
+                )
                 for item_id in ids:
                     tx.mutate(
                         "DELETE FROM similarity WHERE item_a=? OR item_b=?",
                         (item_id, item_id),
                     )
+                    if has_refresh_state:
+                        tx.mutate(
+                            "DELETE FROM similarity_refresh_state WHERE item_id=?",
+                            (item_id,),
+                        )
 
 
 class SimilarityPlugin(BeetsPlugin):
@@ -127,6 +174,7 @@ class SimilarityPlugin(BeetsPlugin):
         self.config.add(
             {
                 "auto": False,
+                "refresh_state": True,
                 "threshold": 0.8,
                 "acoustic": True,
                 "dissociate_penalty": "to-zero",
@@ -473,7 +521,8 @@ class SimilarityPlugin(BeetsPlugin):
         if not targets:
             return
         candidates = list(lib.items())
-        store = SimilarityStore(lib)
+        use_refresh_state = self.config["refresh_state"].get(bool)
+        store = SimilarityStore(lib, refresh_state=use_refresh_state)
         estimate = len(targets) * max(0, len(candidates) - 1)
         if (
             len(targets) >= self.config["warn_items"].get(int)
@@ -491,15 +540,35 @@ class SimilarityPlugin(BeetsPlugin):
                     continue
                 if self._artist_matches(first, second):
                     store.put(first.id, second.id, self.score(first, second))
+        if use_refresh_state:
+            for item in targets.values():
+                store.set_refresh_signature(item.id, self._refresh_signature(item))
+
+    def _refresh_signature(self, item):
+        fields = REFRESH_FIELDS
+        if self.config["acoustic"].get(bool):
+            fields += ACOUSTIC_REFRESH_FIELDS
+        values = [item.get(field) for field in fields]
+        serialized = json.dumps(
+            values, sort_keys=True, separators=(",", ":"), default=str
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def _database_change(self, lib, model):
         if isinstance(model, Item) and model.id:
+            if self.config["refresh_state"].get(bool):
+                store = SimilarityStore(lib, refresh_state=True)
+                signature = self._refresh_signature(model)
+                if store.refresh_signature(model.id) == signature:
+                    return
             self._pending.setdefault(lib, set()).add(model.id)
 
     def _flush(self, lib=None):
         libraries = [lib] if lib is not None else list(self._pending)
         for library in libraries:
             ids = self._pending.pop(library, set())
+            if not ids:
+                continue
             self.refresh_items(
                 library,
                 [item for i in ids if (item := library.get_item(i)) is not None],

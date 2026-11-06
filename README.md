@@ -36,7 +36,7 @@ beet similar --associate 12 34
 beet similar --dissociate 12 34 -f
 beet similar --remove artist:"Toto"
 beet similar --remove                      # full reset, extra confirmation
-beet similar --size                        # similarity table + indexes, in bytes
+beet similar --size                        # similarity + refresh-state storage, in bytes
 ```
 
 `--add` computes every unordered pair **within** the matched query, not against
@@ -92,6 +92,7 @@ Defaults, all under the `similarity` section:
 ```yaml
 similarity:
   auto: no
+  refresh_state: yes
   threshold: 0.8
   acoustic: yes
   dissociate_penalty: to-zero
@@ -144,9 +145,14 @@ unchanged by configuration edits until refreshed.
 
 `auto: yes` adds an import stage to compute imported tracks against local tracks
 sharing their artists. Both album imports and singleton imports are handled as
-individual tracks. Metadata changes reported through beets' `database_change`
-event are queued and refreshed at command exit, coalescing repeated stores.
-For long-running integrations, call `refresh_items(lib, items)` explicitly.
+individual tracks. With `refresh_state: yes` (the default), after an item's
+first refresh, beets' `database_change`
+event queues it only when similarity-relevant metadata changes; unrelated
+edits such as changing the composer do not trigger a refresh. Items without a
+recorded refresh baseline are refreshed once. Queued changes are refreshed at
+command exit, coalescing repeated stores. For long-running integrations, call
+`refresh_items(lib, items)` explicitly. Set `refresh_state: no` to disable the
+stored signatures and refresh after every item database change.
 Deleted items have their incident pairs removed.
 
 By default, artist names match case-insensitively and exactly. Multi-artist
@@ -164,7 +170,8 @@ scores without interactive prompts, but never replace manual choices.
 ## Performance and storage
 
 `beet similar --size` reports allocated SQLite page bytes for the `similarity`
-table and all its indexes, not the size of the entire beets database. It accepts
+table and all its indexes, plus the refresh-state table when it exists; it does
+not report the size of the entire beets database. It accepts
 no query or threshold and does not compute or change scores. Even an empty table
 and index occupy pages. The measurement includes unused space within those
 pages, but excludes database-wide free pages, other tables, and journal/WAL files.

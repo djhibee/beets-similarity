@@ -25,6 +25,7 @@ class SimilarityTest(unittest.TestCase):
         config["similarity"].set(
             {
                 "auto": False,
+                "refresh_state": True,
                 "threshold": 0.8,
                 "acoustic": True,
                 "dissociate_penalty": "to-zero",
@@ -217,7 +218,7 @@ class SimilarityTest(unittest.TestCase):
             expected = sum(
                 row["size"] for row in tx.query(
                     "SELECT SUM(pgsize) AS size FROM dbstat "
-                    "WHERE name IN ('similarity', 'similarity_item_b') GROUP BY name"
+                    "WHERE name IN ('similarity', 'similarity_item_b')"
                 )
             )
         self.assertGreater(expected, empty_size)
@@ -227,6 +228,20 @@ class SimilarityTest(unittest.TestCase):
                 self.command("--size"), f"Similarity storage: {expected} bytes\n"
             )
         self.assertEqual(len(self.store.neighbors(items[0].id)), 49)
+
+    def test_storage_size_includes_refresh_state_table(self):
+        item = self.item()
+        similarity_size = self.store.storage_size()
+        state_store = SimilarityStore(self.lib, refresh_state=True)
+        state_store.set_refresh_signature(item.id, "signature")
+        with self.lib.transaction() as tx:
+            expected = tx.query(
+                "SELECT SUM(pgsize) AS size FROM dbstat "
+                "WHERE name IN ('similarity', 'similarity_item_b', "
+                "'similarity_refresh_state')"
+            )[0]["size"]
+        self.assertEqual(state_store.storage_size(), expected)
+        self.assertGreater(state_store.storage_size(), similarity_size)
 
     def test_size_does_not_require_valid_scoring_configuration(self):
         self.plugin.config["threshold"] = 0
@@ -432,6 +447,44 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(score.call_count, 1)
         self.plugin._item_removed(first)
         self.assertEqual(self.store.neighbors(second.id), [])
+
+    def test_database_change_ignores_unrelated_metadata(self):
+        first = self.item()
+        self.plugin.refresh_items(self.lib, [first])
+
+        first.composer = "New Composer"
+        first.store()
+        with patch.object(self.plugin, "refresh_items") as refresh:
+            self.plugin._database_change(self.lib, first)
+            self.plugin._flush(self.lib)
+        refresh.assert_not_called()
+
+        first.title = "Updated title"
+        first.store()
+        with patch.object(self.plugin, "refresh_items") as refresh:
+            self.plugin._database_change(self.lib, first)
+            self.plugin._flush(self.lib)
+        refresh.assert_called_once()
+
+    def test_refresh_state_can_be_disabled(self):
+        first = self.item()
+        self.plugin.config["refresh_state"] = False
+        self.plugin.refresh_items(self.lib, [first])
+        self.assertFalse(self._refresh_state_table_exists())
+
+        with patch.object(self.plugin, "refresh_items") as refresh:
+            self.plugin._database_change(self.lib, first)
+            self.plugin._flush(self.lib)
+        refresh.assert_called_once()
+
+    def _refresh_state_table_exists(self):
+        with self.lib.transaction() as tx:
+            return bool(
+                tx.query(
+                    "SELECT 1 FROM sqlite_schema "
+                    "WHERE type='table' AND name='similarity_refresh_state'"
+                )
+            )
 
     def test_auto_is_opt_in_and_registers_stage_and_events(self):
         self.assertEqual(self.plugin.import_stages, [])

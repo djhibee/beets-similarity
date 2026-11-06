@@ -75,6 +75,9 @@ threshold filtering. It uses `1.000000` for the self-similarity diagonal and
 `-` for an **uncomputed** pair (not zero).
 `--debug` replaces IDs with the final two directories and filename; tabs and
 newlines in paths are escaped. Use IDs, not debug paths, for script integration.
+Debug lists show all stored neighbors, coloring scores at or above the threshold
+with beets' `ui.colors.text_success` (green by default) and lower scores with
+`ui.colors.text_error` (red by default). This honors `ui.color` and `NO_COLOR`.
 
 ### Manual decisions
 

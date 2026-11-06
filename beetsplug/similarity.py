@@ -62,7 +62,7 @@ def effective_score(row, dissociate_penalty="to-zero"):
 class SimilarityStore:
     """Sparse, undirected pairs in the same SQLite database as beets."""
 
-    def __init__(self, lib):
+    def __init__(self, lib, refresh_state=False):
         self.lib = lib
         with lib.transaction() as tx:
             tx.mutate(
@@ -76,11 +76,13 @@ class SimilarityStore:
             tx.mutate(
                 "CREATE INDEX IF NOT EXISTS similarity_item_b ON similarity(item_b)"
             )
-            tx.mutate(
-                "CREATE TABLE IF NOT EXISTS similarity_refresh_state ("
-                "item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE, "
-                "signature TEXT NOT NULL)"
-            )
+            if refresh_state:
+                tx.mutate(
+                    "CREATE TABLE IF NOT EXISTS similarity_refresh_state ("
+                    "item_id INTEGER PRIMARY KEY "
+                    "REFERENCES items(id) ON DELETE CASCADE, "
+                    "signature TEXT NOT NULL)"
+                )
 
     def get(self, first, second):
         key = pair_key(first, second)
@@ -133,9 +135,8 @@ class SimilarityStore:
             try:
                 rows = tx.query(
                     "SELECT COALESCE(SUM(pgsize), 0) AS size FROM dbstat "
-                    "WHERE name='similarity' OR name IN "
-                    "(SELECT name FROM sqlite_schema "
-                    "WHERE type='index' AND tbl_name='similarity')"
+                    "WHERE name IN ('similarity', 'similarity_item_b', "
+                    "'similarity_refresh_state')"
                 )
             except sqlite3.OperationalError as exc:
                 if "no such table: dbstat" not in str(exc):
@@ -151,15 +152,20 @@ class SimilarityStore:
             if ids is None:
                 tx.mutate("DELETE FROM similarity")
             else:
+                has_refresh_state = tx.query(
+                    "SELECT 1 FROM sqlite_schema "
+                    "WHERE type='table' AND name='similarity_refresh_state'"
+                )
                 for item_id in ids:
                     tx.mutate(
                         "DELETE FROM similarity WHERE item_a=? OR item_b=?",
                         (item_id, item_id),
                     )
-                    tx.mutate(
-                        "DELETE FROM similarity_refresh_state WHERE item_id=?",
-                        (item_id,),
-                    )
+                    if has_refresh_state:
+                        tx.mutate(
+                            "DELETE FROM similarity_refresh_state WHERE item_id=?",
+                            (item_id,),
+                        )
 
 
 class SimilarityPlugin(BeetsPlugin):
@@ -168,6 +174,7 @@ class SimilarityPlugin(BeetsPlugin):
         self.config.add(
             {
                 "auto": False,
+                "refresh_state": True,
                 "threshold": 0.8,
                 "acoustic": True,
                 "dissociate_penalty": "to-zero",
@@ -514,7 +521,8 @@ class SimilarityPlugin(BeetsPlugin):
         if not targets:
             return
         candidates = list(lib.items())
-        store = SimilarityStore(lib)
+        use_refresh_state = self.config["refresh_state"].get(bool)
+        store = SimilarityStore(lib, refresh_state=use_refresh_state)
         estimate = len(targets) * max(0, len(candidates) - 1)
         if (
             len(targets) >= self.config["warn_items"].get(int)
@@ -532,8 +540,9 @@ class SimilarityPlugin(BeetsPlugin):
                     continue
                 if self._artist_matches(first, second):
                     store.put(first.id, second.id, self.score(first, second))
-        for item in targets.values():
-            store.set_refresh_signature(item.id, self._refresh_signature(item))
+        if use_refresh_state:
+            for item in targets.values():
+                store.set_refresh_signature(item.id, self._refresh_signature(item))
 
     def _refresh_signature(self, item):
         fields = REFRESH_FIELDS
@@ -547,10 +556,11 @@ class SimilarityPlugin(BeetsPlugin):
 
     def _database_change(self, lib, model):
         if isinstance(model, Item) and model.id:
-            store = SimilarityStore(lib)
-            signature = self._refresh_signature(model)
-            if store.refresh_signature(model.id) == signature:
-                return
+            if self.config["refresh_state"].get(bool):
+                store = SimilarityStore(lib, refresh_state=True)
+                signature = self._refresh_signature(model)
+                if store.refresh_signature(model.id) == signature:
+                    return
             self._pending.setdefault(lib, set()).add(model.id)
 
     def _flush(self, lib=None):

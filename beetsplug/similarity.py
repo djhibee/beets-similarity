@@ -3,6 +3,7 @@
 import hashlib
 import itertools
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -285,6 +286,43 @@ class SimilarityPlugin(BeetsPlugin):
     def _fingerprint_bytes(value):
         return value.encode("ascii") if isinstance(value, str) else value
 
+    def _log_distance(self, source, target, dist, weights):
+        if not self._log.isEnabledFor(logging.DEBUG):
+            return
+        self._log.debug(
+            "Similarity distance {} -> {}: raw penalty {} / total weight {}"
+            " = {}; nonzero penalties below (final score impact includes / 2)",
+            source.id, target.id, dist.raw_distance, dist.max_distance, float(dist),
+        )
+        fields = {
+            "track_title": "title",
+            "track_artist": "artist",
+            "track_length": "length",
+            "track_id": "mb_trackid",
+            "track_index": "track",
+            "medium": "disc",
+            "album": "album",
+            "release_group": "mb_releasegroupid",
+            "data_source": "data_source",
+        }
+        for key, penalty in dist.items():
+            if key == "acoustic":
+                if all(i.get("acoustid_fingerprint") for i in (source, target)):
+                    values = "saved fingerprints (both alignments averaged)"
+                else:
+                    values = (
+                        f"acoustid_id: {source.get('acoustid_id')!r}"
+                        f" vs {target.get('acoustid_id')!r}"
+                    )
+            else:
+                field = fields[key]
+                values = f"{field}: {source.get(field)!r} vs {target.get(field)!r}"
+            self._log.debug(
+                "Similarity penalty {} -> {}: {}; {}; weight={}; "
+                "normalized distance={}; subtracts {} from final similarity",
+                source.id, target.id, key, values, weights[key], penalty, penalty / 2,
+            )
+
     def score(self, first, second):
         """Return symmetric similarity in [0, 1]; never inspect audio quality."""
         weights = {
@@ -316,9 +354,11 @@ class SimilarityPlugin(BeetsPlugin):
             if not dist.max_distance:
                 raise ui.UserError("Enable at least one applicable similarity weight")
             distances.append(float(dist))
+            self._log_distance(source, target, dist, weights)
         score = max(0.0, min(1.0, 1.0 - sum(distances) / 2))
         self._log.debug(
-            "Similarity score for items {} and {}: {}", first.id, second.id, score
+            "Similarity score for items {} and {}: {} = 1 - ({} + {}) / 2",
+            first.id, second.id, score, *distances,
         )
         return score
 

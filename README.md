@@ -1,8 +1,8 @@
 # beets-similarity
 
 Compare **tracks in your local beets library**, using
-`beets.autotag.match.track_distance`. No albums are matched and no external
-metadata service is queried. Scores are stored in a new `similarity` table in
+`beets.autotag.match.track_distance`. No external metadata service
+is queried. Scores are stored in a new `similarity` table in
 the existing beets database; your tags and global autotagger settings are not
 modified.
 
@@ -42,8 +42,7 @@ beet similar --remove                      # full reset, extra confirmation
 the rest of the library. It is also the refresh command. All normal beets track
 queries work. An empty query selects all tracks. Overwriting scores, changing
 an existing manual choice, and removing scores require confirmation unless
-`-f`/`--force` is supplied. An empty-query reset **always** asks for confirmation,
-even with `--force`. Refreshes preserve manual choices; remove the pair's
+`-f`/`--force` is supplied. Refreshes preserve manual choices; remove the pair's
 scores first to clear a manual choice. Scoped removal deletes all pairs
 touching the selected tracks, including pairs with tracks outside the query.
 
@@ -200,7 +199,7 @@ similarity.refresh_items(lib, [item])
 `similar_items` returns `(Item, similarity)` pairs, highest score first, with
 item-ID tie-breaking, and honors manual choices. It reads stored pairs without
 computing new ones. Consumers control rating prompts, asynchronous review, and
-quality tie-breaking; this plugin deliberately does not change ratings/playlists.
+quality tie-breaking;
 The `similarity` SQL table stores `item_a < item_b`, base `score`, and `manual`
 (`-1` dissociated, `0` automatic, `1` associated); effective similarity is
 `0`/`1` for manual choices and `score` otherwise.

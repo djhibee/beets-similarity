@@ -101,7 +101,10 @@ class SimilarityTest(unittest.TestCase):
 
     def test_scoring_logs_pair_scores_and_bulk_progress(self):
         first, second, third = self.item(), self.item(), self.item()
-        with patch.object(self.plugin._log, "debug") as debug:
+        with (
+            patch.object(self.plugin._log, "isEnabledFor", return_value=False),
+            patch.object(self.plugin._log, "debug") as debug,
+        ):
             self.plugin.score(first, second)
         debug.assert_called_once()
         self.assertIn("Similarity score", debug.call_args.args[0])
@@ -116,6 +119,67 @@ class SimilarityTest(unittest.TestCase):
         )
         self.assertIn("complete", info.call_args.args[0])
         self.assertEqual(info.call_args.args[1:], (3, 3))
+
+    def test_debug_penalties_explain_final_score(self):
+        first = self.item(mb_trackid="recording", mb_releasegroupid="group-one")
+        second = self.item(
+            title="Another Track", artist="Other Artist", length=80,
+            track=2, disc=2, mb_releasegroupid="group-two", album="Discovery",
+            acoustid_id="different-acoustic-id",
+        )
+        with (
+            patch.object(self.plugin._log, "isEnabledFor", return_value=True),
+            patch.object(self.plugin._log, "debug") as debug,
+        ):
+            score = self.plugin.score(first, second)
+        penalties = [
+            call.args for call in debug.call_args_list
+            if call.args[0].startswith("Similarity penalty")
+        ]
+        self.assertAlmostEqual(sum(args[-1] for args in penalties), 1 - score)
+        forward = {args[3]: args for args in penalties if args[1] == first.id}
+        reverse = {args[3]: args for args in penalties if args[1] == second.id}
+        self.assertEqual(set(forward), set(DEFAULT_WEIGHTS) - {"data_source"})
+        self.assertNotIn("track_id", reverse)
+        self.assertIn("'Around the World' vs 'Another Track'", forward["track_title"][4])
+        self.assertEqual(forward["track_length"][4], "length: 429.0 vs 80")
+        self.assertIn("acoustid_id:", forward["acoustic"][4])
+        for key, args in forward.items():
+            self.assertEqual(args[5], DEFAULT_WEIGHTS[key])
+            self.assertEqual(args[-1], args[-2] / 2)
+        summary = debug.call_args.args
+        self.assertEqual(summary[1:4], (first.id, second.id, score))
+        self.assertAlmostEqual(score, 1 - (summary[4] + summary[5]) / 2)
+
+    def test_debug_omits_zero_weight_and_missing_evidence(self):
+        first = self.item(acoustid_id="")
+        second = self.item(acoustid_id="", title="Other title")
+        self.plugin.config["weights"]["track_title"] = 0
+        with (
+            patch.object(self.plugin._log, "isEnabledFor", return_value=True),
+            patch.object(self.plugin._log, "debug") as debug,
+        ):
+            self.assertEqual(self.plugin.score(first, second), 1)
+        self.assertFalse(any(
+            call.args[0].startswith("Similarity penalty")
+            for call in debug.call_args_list
+        ))
+
+    def test_debug_fingerprint_evidence_without_dumping_fingerprints(self):
+        first = self.item(acoustid_fingerprint="fingerprint-a")
+        second = self.item(acoustid_fingerprint="fingerprint-b")
+        with (
+            patch.object(self.plugin, "_acoustic_distance", return_value=0.75),
+            patch.object(self.plugin._log, "isEnabledFor", return_value=True),
+            patch.object(self.plugin._log, "debug") as debug,
+        ):
+            self.plugin.score(first, second)
+        messages = [
+            call.args[0].format(*call.args[1:]) for call in debug.call_args_list
+        ]
+        self.assertTrue(any("saved fingerprints" in message for message in messages))
+        self.assertFalse(any("fingerprint-a" in message for message in messages))
+        self.assertFalse(any("fingerprint-b" in message for message in messages))
 
     def test_release_group_and_album_penalties(self):
         first = self.item(mb_releasegroupid="group-one")

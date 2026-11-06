@@ -55,6 +55,19 @@ directional autotagger distances averaged to make it symmetric. This resolves
 the distance/similarity ambiguity in the original proposal: `--thres` is a
 **minimum similarity**, not a maximum distance. It must be in `(0, 1]`.
 
+To explain a computed score, enable beets' verbose logging and recompute the
+pair's scope, for example `beet -v similar --add -f artist:"Daft Punk"`.
+Debug logs show each directional distance (raw penalty / total applicable
+weight), then its nonzero penalties, largest first: compared metadata values,
+configured weight, normalized distance, and the amount subtracted from the
+final similarity. Each directional contribution is divided by two, so all
+reported subtractions sum to `1 - score`. Zero penalties, zero-weight components,
+and unavailable evidence do not appear in the penalty lines. Acoustic penalties
+identify whether saved fingerprints or AcoustID IDs were used, without dumping
+fingerprints. The final line shows `score = 1 - (forward + reverse) / 2`.
+This is separate from the `similar --debug` display option; listing stored
+scores does not recompute or explain them.
+
 The default action is `--list`. Its deterministic, ID-sorted output includes
 every selected track, with neighbors at or above the threshold:
 

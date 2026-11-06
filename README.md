@@ -93,7 +93,6 @@ similarity:
   auto: no
   threshold: 0.8
   acoustic: yes
-  missing_acoustic_penalty: 0.5
   warn_items: 1000
   warn_pairs: 500000
   fuzzy_artists: no
@@ -129,8 +128,8 @@ With `acoustic: yes`, each comparison includes an acoustic distance component:
    fingerprints using pyacoustid (even if their AcoustID IDs agree), averaging
    both alignment directions for symmetry.
 2. Otherwise, if both have `acoustid_id`, use ID equality as acoustic evidence.
-3. If neither source is available for both tracks, use
-   `missing_acoustic_penalty` and warn once per plugin instance.
+3. If neither source is available for both tracks, omit the acoustic component
+   rather than penalizing the comparison.
 
 Populate these fields with beets' **chroma** plugin before computing scores.
 This plugin does not generate fingerprints or make AcoustID network requests.

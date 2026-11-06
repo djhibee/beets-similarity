@@ -356,8 +356,25 @@ class SimilarityTest(unittest.TestCase):
         self.item(path=b"/music/Daft Punk/Homework/song\tname\n.flac")
         self.assertEqual(
             self.command("--list", "--debug"),
-            "Daft Punk/Homework/song\\tname\\n.flac:\t\n",
+            "Daft Punk/Homework/song\\tname\\n.flac:\n",
         )
+
+    def test_debug_list_indents_pairs_and_colors_by_threshold(self):
+        first = self.item(path="album1/toto.flac")
+        above = self.item(path="album1/toto.mp3")
+        below = self.item(path="album2/toto.flac")
+        self.store.put(first.id, above.id, 1)
+        self.store.put(first.id, below.id, 0.7)
+        with patch.object(
+            ui, "colorize", side_effect=lambda text, color: f"[{color}]{text}"
+        ):
+            output = self.command("--list", "--debug")
+
+        self.assertIn(
+            "Music/album1/toto.flac:\n\t\tMusic/album1/toto.mp3\t\t[green](1.000000)",
+            output,
+        )
+        self.assertIn("\t\tMusic/album2/toto.flac\t\t[red](0.700000)", output)
 
     def test_scoped_remove_and_reset_confirmation_even_with_force(self):
         first, second = self.item(), self.item(artist="Toto")

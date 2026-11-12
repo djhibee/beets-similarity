@@ -205,7 +205,11 @@ pairs**, so always scope large-library commands by artist, genre, etc.
 An unscoped computation, at least `warn_items` selected tracks, or at least
 `warn_pairs` pairs logs a warning and asks to proceed (`--force` bypasses the
 prompt, not the warning). Automatic batches log warnings for large candidate
-sets but do not prompt.
+sets but do not prompt. The warning's upper bound is the number of target tracks
+times `max(0, library tracks - 1)`, before artist filtering;
+it can count pairs between targets twice. Before scoring, an info log reports
+the exact number of unique pairs matching the artist filter. Counting requires
+an additional pass over the candidates but does not keep all pairs in memory.
 
 Storage is sparse: only computed pairs are saved, once per unordered pair, with
 a composite primary key and a reverse-lookup index. A fully populated 50k matrix

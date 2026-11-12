@@ -586,17 +586,29 @@ class SimilarityPlugin(BeetsPlugin):
             or estimate >= self.config["warn_pairs"].get(int)
         ):
             self._log.warning(
-                "Automatic similarity refresh: up to {} candidate comparisons", estimate
+                "Automatic similarity refresh: up to {} candidate comparisons before "
+                "artist filtering ({} target tracks x max(0, {} library tracks - 1)); "
+                "target-to-target pairs may be counted twice",
+                estimate, len(targets), len(candidates),
             )
-        for first in targets.values():
-            for second in candidates:
-                if first.id == second.id:
-                    continue
-                # Both artist modes form a union, and targeted pairs run only once.
-                if second.id in targets and second.id < first.id:
-                    continue
-                if self._artist_matches(first, second):
-                    store.put(first.id, second.id, self.score(first, second))
+
+        def matching_pairs():
+            for first in targets.values():
+                for second in candidates:
+                    if first.id == second.id:
+                        continue
+                    if second.id in targets and second.id < first.id:
+                        continue
+                    if self._artist_matches(first, second):
+                        yield first, second
+
+        total = sum(1 for _ in matching_pairs())
+        self._log.info(
+            "Automatic similarity refresh: {} unique pairs to score after artist filtering",
+            total,
+        )
+        for first, second in matching_pairs():
+            store.put(first.id, second.id, self.score(first, second))
         if use_refresh_state:
             for item in targets.values():
                 store.set_refresh_signature(item.id, self._refresh_signature(item))

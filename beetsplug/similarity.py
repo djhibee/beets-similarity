@@ -452,6 +452,11 @@ class SimilarityPlugin(BeetsPlugin):
             score = old["score"] if old else self.score(*(lib.get_item(i) for i in ids))
             store.put(*ids, score, manual=1 if action == "associate" else -1)
             return
+        if action == "remove" and not args:
+            # Reset is destructive even when --force was supplied.
+            if self._confirm("Reset the entire similarity matrix, including manual choices?"):
+                store.remove()
+            return
         items = sorted(lib.items(args), key=lambda i: i.id)
         if action == "add":
             count = len(items)
@@ -482,11 +487,7 @@ class SimilarityPlugin(BeetsPlugin):
                 "Similarity complete: scored {} pairs across {} tracks", total, count
             )
         elif action == "remove":
-            if not args:
-                # Reset is destructive even when --force was supplied.
-                if self._confirm("Reset the entire similarity matrix, including manual choices?"):
-                    store.remove()
-            elif opts.force or self._confirm("Remove scores touching the selected tracks?"):
+            if opts.force or self._confirm("Remove scores touching the selected tracks?"):
                 store.remove(i.id for i in items)
         else:
             self._list(store, items, threshold, opts.matrix, opts.debug)

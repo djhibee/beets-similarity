@@ -465,9 +465,11 @@ class SimilarityPlugin(BeetsPlugin):
             if existing and not opts.force and not self._confirm("Refresh existing scores?"):
                 return
             total = count * (count - 1) // 2
+            artist_count = len(set().union(*(self._artists(item) for item in items)))
             self._log.info(
-                "Similarity refresh starts: {} pairs to score across {} tracks.",
-                total, count,
+                "Similarity refresh starts: {} pairs to score for {} tracks "
+                "and {} artists matching {} artists.",
+                total, count, artist_count, artist_count,
             )
             for progress, (first, second) in enumerate(
                 itertools.combinations(items, 2), 1
@@ -569,7 +571,7 @@ class SimilarityPlugin(BeetsPlugin):
         scopes = {frozenset(self._artists(item)) for item in targets.values()}
         artist_names = set().union(*scopes)
         if not artist_names:
-            return {scope: [] for scope in scopes}
+            return {scope: [] for scope in scopes}, 0
         fuzzy = self.config["fuzzy_artists"].get(bool)
         bare_ascii = self.config["bare_ascii_artists"].get(bool)
         threshold = self._number("artist_threshold") if fuzzy else 0.0
@@ -594,22 +596,24 @@ class SimilarityPlugin(BeetsPlugin):
 
         exact_index = {}
         bare_index = {}
-        for name, values in library_names.items():
-            exact_index.setdefault(name.casefold(), set()).update(values)
+        for name in library_names:
+            exact_index.setdefault(name.casefold(), set()).add(name)
             if bare_ascii:
                 bare = self._bare(name)
                 if bare:
-                    bare_index.setdefault(bare, set()).update(values)
+                    bare_index.setdefault(bare, set()).add(name)
         matches = {}
+        matched_names = set()
         for name in artist_names:
-            values = set(exact_index.get(name.casefold(), ()))
+            names = set(exact_index.get(name.casefold(), ()))
             if bare_ascii:
-                values.update(bare_index.get(self._bare(name), ()))
+                names.update(bare_index.get(self._bare(name), ()))
             if fuzzy:
-                for other, other_values in library_names.items():
+                for other in library_names:
                     if string_dist(name, other) <= threshold:
-                        values.update(other_values)
-            matches[name] = values
+                        names.add(other)
+            matched_names.update(names)
+            matches[name] = set().union(*(library_names[other] for other in names))
 
         candidates = {}
         for scope in scopes:
@@ -627,14 +631,14 @@ class SimilarityPlugin(BeetsPlugin):
                 )
                 selected.update((item.id, item) for item in lib.items(query))
             candidates[scope] = list(selected.values())
-        return candidates
+        return candidates, len(matched_names)
 
     def refresh_items(self, lib, items):
         """Refresh incident artist-scoped pairs once per batch, preserving overrides."""
         targets = {item.id: item for item in items if item.id}
         if not targets:
             return
-        candidates = self._refresh_candidates(lib, targets)
+        candidates, matched_artist_count = self._refresh_candidates(lib, targets)
         use_refresh_state = self.config["refresh_state"].get(bool)
         store = SimilarityStore(lib, refresh_state=use_refresh_state)
         estimate = sum(
@@ -662,9 +666,9 @@ class SimilarityPlugin(BeetsPlugin):
         )
         artist_count = len(set().union(*(self._artists(i) for i in targets.values())))
         self._log.info(
-            "Automatic similarity refresh: {} artists across {} items; "
-            "{} similarity scores to recompute",
-            artist_count, len(targets), total,
+            "Similarity refresh starts: {} pairs to score for {} tracks "
+            "and {} artists matching {} artists.",
+            total, len(targets), artist_count, matched_artist_count,
         )
         progress = 0
         for index, first in enumerate(targets.values(), 1):

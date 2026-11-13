@@ -46,6 +46,9 @@ an existing manual choice, and removing scores require confirmation unless
 `-f`/`--force` is supplied. Refreshes preserve manual choices; remove the pair's
 scores first to clear a manual choice. Scoped removal deletes all pairs
 touching the selected tracks, including pairs with tracks outside the query.
+The start log reports pairs, tracks, and distinct artist names as
+`Similarity refresh starts: 66 pairs to score for 12 tracks and 3 artists matching 3 artists.`
+For `--add`, both artist counts are equal because it does not expand the query.
 
 ### Score and output conventions
 
@@ -188,9 +191,13 @@ including explicitly computed cross-artist pairs; use `--add` to refresh those
 or `--remove` to discard them. Automatic refreshes intentionally replace computed
 scores without interactive prompts, but never replace manual choices.
 
-Before scoring, each refresh logs the number of distinct target artist names,
-target items, and scores to recompute, excluding self-comparisons and duplicate
-pairs. It then logs `Item i/n` with the item ID. With verbose logging enabled,
+Before scoring, each refresh logs the number of pairs to score, target tracks,
+distinct target artist names, and distinct library artist names matched by the
+artist matching algorithm. Matched names are counted once across all targets and
+matching modes; unrelated co-artists on matching tracks are not counted.
+Fuzzy or bare-ASCII matching can expand the matched artist count, as can
+case-insensitive spelling variants. Pair counts exclude self-comparisons and
+duplicate pairs. It then logs `Item i/n` with the item ID. With verbose logging enabled,
 pair score messages include a batch-wide `(i/total)` counter; at verbosity three
 or higher, they also retain the directional-distance formula.
 

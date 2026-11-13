@@ -115,9 +115,17 @@ class SimilarityTest(unittest.TestCase):
 
         with patch.object(self.plugin._log, "info") as info:
             self.command("--add", "-f", "artist:Daft Punk")
-        self.assertEqual(info.call_count, 4)
+        self.assertEqual(info.call_count, 5)
         self.assertEqual(
-            [call.args[1:] for call in info.call_args_list[:3]],
+            info.call_args_list[0].args,
+            (
+                "Similarity refresh starts: {} pairs to score for {} tracks "
+                "and {} artists matching {} artists.",
+                3, 3, 1, 1,
+            ),
+        )
+        self.assertEqual(
+            [call.args[1:] for call in info.call_args_list[1:4]],
             [(1, 3), (2, 3), (3, 3)],
         )
         self.assertIn("complete", info.call_args.args[0])
@@ -583,8 +591,12 @@ class SimilarityTest(unittest.TestCase):
         self.item(artist="Other")
         self.plugin.config["fuzzy_artists"] = True
         self.plugin.config["bare_ascii_artists"] = True
-        with patch.object(self.plugin, "score", wraps=self.plugin.score) as score:
+        with (
+            patch.object(self.plugin, "score", wraps=self.plugin.score) as score,
+            patch.object(self.plugin._log, "info") as info,
+        ):
             self.plugin.refresh_items(self.lib, [first, second, first])
+        self.assertEqual(info.call_args_list[0].args[1:], (1, 2, 2, 2))
         self.assertEqual(score.call_count, 1)
         self.assertEqual(len(self.store.neighbors(first.id)), 1)
 
@@ -612,7 +624,13 @@ class SimilarityTest(unittest.TestCase):
             ):
                 config["verbose"] = verbose
                 self.plugin.refresh_items(self.lib, [first, second, fourth, first])
-            self.assertEqual(info.call_args_list[0].args[1:], (2, 3, 4))
+            self.assertEqual(
+                info.call_args_list[0].args[0].format(
+                    *info.call_args_list[0].args[1:]
+                ),
+                "Similarity refresh starts: 4 pairs to score for 3 tracks "
+                "and 2 artists matching 2 artists.",
+            )
             self.assertEqual(
                 [call.args[1:] for call in info.call_args_list[1:]],
                 [(1, 3, first.id), (2, 3, second.id), (3, 3, fourth.id)],
@@ -641,7 +659,7 @@ class SimilarityTest(unittest.TestCase):
             patch.object(self.plugin, "score") as score,
         ):
             self.plugin.refresh_items(self.lib, [first, second])
-        self.assertEqual(info.call_args_list[0].args[1:], (1, 2, 0))
+        self.assertEqual(info.call_args_list[0].args[1:], (0, 2, 1, 1))
         self.assertEqual(
             [call.args[1:] for call in info.call_args_list[1:]],
             [(1, 2, first.id), (2, 2, second.id)],
@@ -695,8 +713,10 @@ class SimilarityTest(unittest.TestCase):
             patch("beets.autotag.distance.string_dist", wraps=string_dist) as distance,
             patch.object(self.lib, "items", wraps=self.lib.items) as items,
             patch.object(self.plugin, "score", return_value=0.9),
+            patch.object(self.plugin._log, "info") as info,
         ):
             self.plugin.refresh_items(self.lib, [first, second])
+        self.assertEqual(info.call_args_list[0].args[1:], (3, 2, 1, 2))
         self.assertEqual(distance.call_count, 3)
         items.assert_called_once()
         query = items.call_args.args[0]
@@ -712,8 +732,12 @@ class SimilarityTest(unittest.TestCase):
         second = self.item(artist="Guest", artists=["Guest", "Dvo-rak!"])
         other = self.item(artist="Dvorak Ensemble")
         self.plugin.config["bare_ascii_artists"] = True
-        with patch.object(self.lib, "items", wraps=self.lib.items) as items:
+        with (
+            patch.object(self.lib, "items", wraps=self.lib.items) as items,
+            patch.object(self.plugin._log, "info") as info,
+        ):
             self.plugin.refresh_items(self.lib, [first])
+        self.assertEqual(info.call_args_list[0].args[1:], (1, 1, 1, 2))
         items.assert_called_once()
         query = items.call_args.args[0]
         self.assertIsNotNone(query.clause()[0])
@@ -734,8 +758,12 @@ class SimilarityTest(unittest.TestCase):
     def test_refresh_without_artists_fetches_no_track_models(self):
         first = self.item(artist="", artists=[])
         self.item()
-        with patch.object(self.lib, "items", wraps=self.lib.items) as items:
+        with (
+            patch.object(self.lib, "items", wraps=self.lib.items) as items,
+            patch.object(self.plugin._log, "info") as info,
+        ):
             self.plugin.refresh_items(self.lib, [first])
+        self.assertEqual(info.call_args_list[0].args[1:], (0, 1, 0, 0))
         items.assert_not_called()
         self.assertEqual(self.store.neighbors(first.id), [])
 

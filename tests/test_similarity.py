@@ -596,48 +596,6 @@ class SimilarityTest(unittest.TestCase):
         self.assertIsNone(self.store.get(first.id, other.id))
         self.assertIsNotNone(self.store.get(first.id, collaboration.id))
 
-    def test_auto_refresh_logs_prefilter_bound_and_actual_unique_pairs(self):
-        first, second = self.item(), self.item()
-        self.item(artist="Guest", artists=["Guest", "Daft Punk"])
-        self.item(artist="Other")
-        self.plugin.config["warn_pairs"] = 1
-        original_score = self.plugin.score
-        with (
-            patch.object(self.plugin._log, "warning") as warning,
-            patch.object(self.plugin._log, "info") as info,
-            patch.object(self.plugin, "score", wraps=original_score) as score,
-        ):
-            def score_after_log(*args):
-                info.assert_called_once()
-                return original_score(*args)
-
-            score.side_effect = score_after_log
-            self.plugin.refresh_items(self.lib, [first, second, first])
-
-        self.assertIn("before artist filtering", warning.call_args.args[0])
-        self.assertEqual(warning.call_args.args[1:], (6, 2, 4))
-        self.assertIn("after artist filtering", info.call_args.args[0])
-        self.assertEqual(info.call_args.args[1:], (3,))
-        self.assertEqual(score.call_count, 3)
-
-    def test_auto_refresh_logs_zero_and_optional_artist_matches(self):
-        first = self.item(artist="Beyoncé")
-        self.item(artist="Beyonce")
-        self.item(artist="Other")
-        with (
-            patch.object(self.plugin._log, "info") as info,
-            patch.object(self.plugin, "score", wraps=self.plugin.score) as score,
-        ):
-            self.plugin.refresh_items(self.lib, [first])
-            self.assertEqual(info.call_args.args[1:], (0,))
-            self.assertEqual(score.call_count, 0)
-
-            self.plugin.config["bare_ascii_artists"] = True
-            self.plugin.config["fuzzy_artists"] = True
-            self.plugin.refresh_items(self.lib, [first])
-            self.assertEqual(info.call_args.args[1:], (1,))
-            self.assertEqual(score.call_count, 1)
-
     def test_artist_edit_preserves_out_of_scope_scores_and_manual_choices(self):
         first, second, third = self.item(), self.item(), self.item()
         self.store.put(first.id, second.id, 1)

@@ -122,8 +122,9 @@ similarity:
   dissociate_penalty: to-zero
   warn_items: 1000
   warn_pairs: 500000
-  fuzzy_artists: no
-  bare_ascii_artists: no
+  scope: title
+  fuzzy: no
+  bare_ascii: no
   artist_threshold: 0.2
   weights:
     track_title: 4.0
@@ -168,8 +169,9 @@ unchanged by configuration edits until refreshed.
 ### Automatic computation
 
 `auto: yes` adds an import stage to compute imported tracks against local tracks
-sharing their artists. Both album imports and singleton imports are handled as
-individual tracks. With `refresh_state: yes` (the default), after an item's
+sharing their title by default (`scope: title`). Set `scope: artist` to use the
+previous artist-based matching instead. Both album imports and singleton imports
+are handled as individual tracks. With `refresh_state: yes` (the default), after an item's
 first refresh, beets' `database_change`
 event queues it only when similarity-relevant metadata changes; unrelated
 edits such as changing the composer do not trigger a refresh. Items without a
@@ -180,23 +182,28 @@ stored signatures and refresh after every item database change.
 Set `remove_on_delete: yes` to list and confirm before removing similarity
 pairs that touch a deleted item. This is disabled by default.
 
-By default, artist names match case-insensitively and exactly. Multi-artist
-tracks match any shared artist, considering both `artist` and `artists`.
-`fuzzy_artists` additionally uses beets' string
-distance with the maximum `artist_threshold`; `bare_ascii_artists` additionally
-compares transliterated, case-folded names with punctuation/whitespace removed.
+Within the chosen scope, titles or artist names match case-insensitively and
+exactly. With `scope: artist`, multi-artist tracks match any shared artist,
+considering both `artist` and `artists`.
+`fuzzy` additionally uses beets' string distance with the maximum
+`artist_threshold` (this threshold applies to titles too); `bare_ascii` additionally
+compares transliterated, case-folded values with punctuation/whitespace removed.
+These replace the former `fuzzy_artists` and `bare_ascii_artists` options:
+rename those keys in existing configurations. For example, `scope: title` with
+`bare_ascii: yes` matches `Dvořák` and `Dvo-rak!` titles regardless of artist.
 When both modes are enabled, their results are unioned by item ID, so a pair is
-scored once per refresh batch. Tracks with no artist do not match all other
-unknown-artist tracks. Pairs outside the current artist scope are left untouched,
-including explicitly computed cross-artist pairs; use `--add` to refresh those
+scored once per refresh batch. Tracks with an empty title (or no artists in
+artist scope) do not match other tracks with missing values.
+Pairs outside the current scope are left untouched,
+including explicitly computed cross-scope pairs; use `--add` to refresh those
 or `--remove` to discard them. Automatic refreshes intentionally replace computed
 scores without interactive prompts, but never replace manual choices.
 
 Before scoring, each refresh logs the number of pairs to score, target tracks,
-distinct target artist names, and distinct library artist names matched by the
-artist matching algorithm. Matched names are counted once across all targets and
+distinct target titles or artist names, and distinct library values matched by the
+scoped matching algorithm. Matched values are counted once across all targets and
 matching modes; unrelated co-artists on matching tracks are not counted.
-Fuzzy or bare-ASCII matching can expand the matched artist count, as can
+Fuzzy or bare-ASCII matching can expand the matched value count, as can
 case-insensitive spelling variants. Pair counts exclude self-comparisons and
 duplicate pairs. It then logs `Item i/n` with the item ID. With verbose logging enabled,
 pair score messages include a batch-wide `(i/total)` counter; at verbosity three
@@ -221,12 +228,13 @@ An unscoped computation, at least `warn_items` selected tracks, or at least
 prompt, not the warning). Automatic batches log warnings for large candidate
 sets but do not prompt.
 
-Automatic refreshes read distinct stored `artist` and `artists` values, match
-each unique target artist once, then use beets SQL queries to fetch only tracks
-in that artist scope. Targets sharing the same artist credits reuse the result.
+Automatic refreshes read distinct stored `title` values (or `artist` and
+`artists` values with `scope: artist`), match each unique target value once,
+then use beets SQL queries to fetch only tracks in that scope.
+Targets sharing the same title or artist credits reuse the result.
 This applies to exact Unicode case-folding, fuzzy, and bare-ASCII matching:
 there is no full-library track-model fallback. Distinct-value discovery still
-reads the library's artist columns; fuzzy matching compares unique artist names,
+reads the library's scoped columns; fuzzy matching compares unique values,
 not every track against every imported track.
 
 The `fuzzy` and `bareasc` query plugins are not required. Their `~` and `#`

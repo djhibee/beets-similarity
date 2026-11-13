@@ -28,28 +28,32 @@ plugins: [similarity]
 ```sh
 beet similar --add artist:"Daft Punk"
 beet similar --add -f artist:"Toto"         # refresh existing scores
+beet similar --add --matrix artist:"Daft Punk" # all pairs within the query
 beet similar --list artist:"Daft Punk"
 beet similar --list --thres 0.35 artist:"Daft Punk"
 beet similar --list --matrix artist:"Daft Punk"
 beet similar --list --matrix --debug artist:"Daft Punk"
-beet similar --associate 12 34
-beet similar --dissociate 12 34 -f
+beet similar --associate /dir1/path/item1 /dir2/path/item2
+beet similar --associate -f --id 12 34
+beet similar --dissociate /dir1/path/item1 /dir2/path/item2
+beet similar --dissociate --id 12 34 -f
 beet similar --remove artist:"Toto"
 beet similar --remove                      # full reset, extra confirmation
 beet similar --size                        # similarity + refresh-state storage, in bytes
 ```
 
-`--add` computes every unordered pair **within** the matched query, not against
-the rest of the library. It is also the refresh command. All normal beets track
-queries work. An empty query selects all tracks. Overwriting scores, changing
-an existing manual choice, and removing scores require confirmation unless
-`-f`/`--force` is supplied. Refreshes preserve manual choices; remove the pair's
-scores first to clear a manual choice. Scoped removal deletes all pairs
-touching the selected tracks, including pairs with tracks outside the query.
-Full reset clears all similarity pairs without loading or sorting library tracks.
-The start log reports pairs, tracks, and distinct artist names as
-`Similarity refresh starts: 66 pairs to score for 12 tracks and 3 artists matching 3 artists.`
-For `--add`, both artist counts are equal because it does not expand the query.
+By default, `--add` computes scores from each track in the matched query to
+tracks across the library that share its configured scope (artist or title),
+including fuzzy and bare-ASCII matches when enabled. The query determines which
+tracks are refreshed; it does not limit their matching candidates.
+`--add --matrix` retains the all-pairs behavior, computing every unordered pair
+within the matched query. All normal beets track queries work. An empty query
+selects all tracks. Overwriting scores, changing an existing manual choice, and
+removing scores require confirmation unless `-f`/`--force` is supplied.
+Refreshes preserve manual choices; remove the pair's scores first to clear a
+manual choice. Scoped removal deletes all pairs touching the selected tracks,
+including pairs with tracks outside the query. Full reset clears all similarity
+pairs without loading or sorting library tracks.
 
 ### Score and output conventions
 
@@ -84,9 +88,10 @@ every selected track, with neighbors at or above the threshold:
 ```
 
 The ID and neighbors are separated by a tab, neighbors by `; `, and scores have
-six decimal places. Only neighbors **inside the query** appear. Warnings and
-prompts use beets' usual logging/UI channels; use a scoped query and `--force`
-for noninteractive computation.
+six decimal places. The query selects which tracks appear as rows; their
+neighbors may come from anywhere in the library. Warnings and prompts use
+beets' usual logging/UI channels; use a scoped query and `--force` for
+noninteractive computation.
 
 `--matrix` displays all stored scores in an aligned, symmetric square, without
 threshold filtering. It uses `1.000000` for the self-similarity diagonal and
@@ -106,7 +111,8 @@ subtracts `dissociate_penalty` from the base score, with a floor of `0`; the
 base computed score is retained. The default `to-zero` value uses the base score
 itself as the penalty, preserving the previous behavior. These decisions
 survive refreshes and are symmetric; manual operations require two existing,
-distinct item IDs.
+distinct items. Item paths are used by default; pass `--id` to interpret both
+operands as item IDs.
 
 ## Configuration
 
@@ -195,9 +201,10 @@ When both modes are enabled, their results are unioned by item ID, so a pair is
 scored once per refresh batch. Tracks with an empty title (or no artists in
 artist scope) do not match other tracks with missing values.
 Pairs outside the current scope are left untouched,
-including explicitly computed cross-scope pairs; use `--add` to refresh those
-or `--remove` to discard them. Automatic refreshes intentionally replace computed
-scores without interactive prompts, but never replace manual choices.
+including explicitly computed cross-scope pairs; use `--add --matrix` to refresh
+all pairs within a query or `--remove` to discard pairs. Automatic refreshes
+intentionally replace computed scores without interactive prompts, but never
+replace manual choices.
 
 Before scoring, each refresh logs the number of pairs to score, target tracks,
 distinct target titles or artist names, and distinct library values matched by the

@@ -207,6 +207,12 @@ An unscoped computation, at least `warn_items` selected tracks, or at least
 prompt, not the warning). Automatic batches log warnings for large candidate
 sets but do not prompt.
 
+Automatic refreshes use beets artist queries to fetch exact ASCII artist
+candidates (including multi-artist credits) instead of loading every library
+item into Python. Fuzzy or transliterated matching, and non-ASCII names whose
+Unicode case-folding cannot be represented by SQLite's case-insensitive query,
+retain the full-library fallback to preserve matching behavior.
+
 Storage is sparse: only computed pairs are saved, once per unordered pair, with
 a composite primary key and a reverse-lookup index. A fully populated 50k matrix
 has a **10 GB decimal raw float64 score payload alone**. With IDs, manual flags,

@@ -596,6 +596,23 @@ class SimilarityTest(unittest.TestCase):
         self.assertIsNone(self.store.get(first.id, other.id))
         self.assertIsNotNone(self.store.get(first.id, collaboration.id))
 
+    def test_exact_artist_refresh_queries_only_artist_candidates(self):
+        first = self.item(artist="Daft Punk")
+        second = self.item(artist="Daft Punk")
+        self.item(artist="Toto")
+        with patch.object(self.lib, "items", wraps=self.lib.items) as items:
+            self.plugin.refresh_items(self.lib, [first])
+        self.assertEqual(items.call_count, 1)
+        self.assertEqual(len(self.store.neighbors(first.id)), 1)
+
+    def test_non_ascii_exact_artist_refresh_preserves_casefold_matching(self):
+        first = self.item(artist="Beyoncé")
+        second = self.item(artist="BEYONCÉ")
+        with patch.object(self.lib, "items", wraps=self.lib.items) as items:
+            self.plugin.refresh_items(self.lib, [first])
+        self.assertEqual(len(self.store.neighbors(first.id)), 1)
+        items.assert_called_once_with()
+
     def test_artist_edit_preserves_out_of_scope_scores_and_manual_choices(self):
         first, second, third = self.item(), self.item(), self.item()
         self.store.put(first.id, second.id, 1)

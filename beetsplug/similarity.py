@@ -11,6 +11,7 @@ import sqlite3
 from beets import config, ui
 from beets.autotag import match
 from beets.autotag.hooks import TrackInfo
+from beets.dbcore.query import OrQuery, StringQuery, SubstringQuery
 from beets.library import Item
 from beets.plugins import BeetsPlugin
 from unidecode import unidecode
@@ -572,12 +573,38 @@ class SimilarityPlugin(BeetsPlugin):
                         return True
         return False
 
+    def _refresh_candidates(self, lib, targets):
+        artist_names = {
+            artist for item in targets.values() for artist in self._artists(item)
+        }
+        if not artist_names:
+            return []
+        if (
+            self.config["fuzzy_artists"].get(bool)
+            or self.config["bare_ascii_artists"].get(bool)
+            or any(not artist.isascii() for artist in artist_names)
+        ):
+            return list(lib.items())
+
+        candidates = {}
+        artist_names = sorted(artist_names)
+        for start in range(0, len(artist_names), 100):
+            names = artist_names[start : start + 100]
+            query = OrQuery(
+                [
+                    *(StringQuery("artist", name) for name in names),
+                    *(SubstringQuery("artists", name) for name in names),
+                ]
+            )
+            candidates.update((item.id, item) for item in lib.items(query))
+        return list(candidates.values())
+
     def refresh_items(self, lib, items):
         """Refresh incident artist-scoped pairs once per batch, preserving overrides."""
         targets = {item.id: item for item in items if item.id}
         if not targets:
             return
-        candidates = list(lib.items())
+        candidates = self._refresh_candidates(lib, targets)
         use_refresh_state = self.config["refresh_state"].get(bool)
         store = SimilarityStore(lib, refresh_state=use_refresh_state)
         estimate = len(targets) * max(0, len(candidates) - 1)

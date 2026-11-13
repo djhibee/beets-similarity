@@ -38,6 +38,7 @@ REFRESH_FIELDS = (
     "track",
     "disc",
     "mb_trackid",
+    "mb_releasetrackid",
     "album",
     "mb_releasegroupid",
 )
@@ -332,6 +333,13 @@ class SimilarityPlugin(BeetsPlugin):
         }
         if any(not math.isfinite(w) or w < 0 for w in weights.values()):
             raise ui.UserError("similarity weights must be finite and nonnegative")
+        release_track = first.get("mb_releasetrackid")
+        if release_track and release_track == second.get("mb_releasetrackid"):
+            self._log.debug(
+                "Similarity score for items {} and {}: 1.0 (same mb_releasetrackid)",
+                first.id, second.id,
+            )
+            return 1.0
         acoustic = (
             self._acoustic_distance(first, second)
             if self.config["acoustic"].get(bool)

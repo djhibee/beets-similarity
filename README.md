@@ -157,6 +157,8 @@ a mismatch if only one side has it; if neither has it, that component is omitted
 Title, artist, duration, numbering and recording-ID penalties come from beets'
 autotagger, including its normalization and duration tolerances. Weights are
 applied only to this plugin's temporary distance objects.
+Two tracks sharing the same non-empty `mb_releasetrackid` are the same track of
+the same release, so their score is always `1`, regardless of weights.
 **Bitrate, format, sample rate, and other quality fields never affect scores.**
 
 ### Acoustic evidence

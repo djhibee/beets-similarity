@@ -80,6 +80,16 @@ class SimilarityTest(unittest.TestCase):
         second.bitrate = 64000
         self.assertEqual(self.plugin.score(first, second), 1.0)
 
+    def test_same_release_track_id_forces_full_score(self):
+        first = self.item(mb_releasetrackid="release-track")
+        second = self.item(
+            title="Another Track", artist="Other Artist", length=80,
+            mb_releasetrackid="release-track",
+        )
+        self.assertEqual(self.plugin.score(first, second), 1.0)
+        second.mb_releasetrackid = "other"
+        self.assertLess(self.plugin.score(first, second), 1.0)
+
     def test_distance_uses_autotagger_and_is_symmetric(self):
         from beets.autotag import match
 

@@ -39,7 +39,7 @@ class SimilarityTest(unittest.TestCase):
                 "scope": "title",
                 "fuzzy": False,
                 "bare_ascii": False,
-                "artist_threshold": 0.2,
+                "fuzzy_thres": 0.2,
             }
         )
         self.plugin = SimilarityPlugin()

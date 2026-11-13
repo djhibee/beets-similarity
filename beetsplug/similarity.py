@@ -187,7 +187,7 @@ class SimilarityPlugin(BeetsPlugin):
                 "scope": "title",
                 "fuzzy": False,
                 "bare_ascii": False,
-                "artist_threshold": 0.2,
+                "fuzzy_thres": 0.2,
             }
         )
         self._pending = {}
@@ -653,7 +653,7 @@ class SimilarityPlugin(BeetsPlugin):
             return {scope: [] for scope in scopes}, 0
         fuzzy = self.config["fuzzy"].get(bool)
         bare_ascii = self.config["bare_ascii"].get(bool)
-        threshold = self._number("artist_threshold") if fuzzy else 0.0
+        threshold = self._number("fuzzy_thres") if fuzzy else 0.0
 
         library_names = {}
         with lib.transaction() as tx:

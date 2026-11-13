@@ -131,7 +131,7 @@ similarity:
   scope: title
   fuzzy: no
   bare_ascii: no
-  artist_threshold: 0.2
+  fuzzy_thres: 0.2
   weights:
     track_title: 4.0
     track_artist: 3.0
@@ -192,7 +192,7 @@ Within the chosen scope, titles or artist names match case-insensitively and
 exactly. With `scope: artist`, multi-artist tracks match any shared artist,
 considering both `artist` and `artists`.
 `fuzzy` additionally uses beets' string distance with the maximum
-`artist_threshold` (this threshold applies to titles too); `bare_ascii` additionally
+`fuzzy_thres` (applies to whichever scope, artist or title, is matched); `bare_ascii` additionally
 compares transliterated, case-folded values with punctuation/whitespace removed.
 These replace the former `fuzzy_artists` and `bare_ascii_artists` options:
 rename those keys in existing configurations. For example, `scope: title` with
@@ -247,7 +247,7 @@ not every track against every imported track.
 The `fuzzy` and `bareasc` query plugins are not required. Their `~` and `#`
 queries have different matching semantics: fuzzy queries use a similarity ratio
 and Python-side filtering, while bare-ASCII queries use substring/smart-case
-matching. Automatic similarity refreshes retain `artist_threshold` and the
+matching. Automatic similarity refreshes retain `fuzzy_thres` and the
 exact normalized-name matching described above.
 
 Storage is sparse: only computed pairs are saved, once per unordered pair, with

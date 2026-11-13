@@ -120,8 +120,8 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(
             info.call_args_list[0].args,
             (
-                "Similarity refresh starts: {} pairs to score for {} tracks "
-                "and {} artists matching {} artists.",
+                "Similarity refresh starts: {} scoped pairs to score for {} "
+                "tracks and {} scoped values matching {} library values.",
                 3, 3, 1, 1,
             ),
         )
@@ -368,24 +368,37 @@ class SimilarityTest(unittest.TestCase):
                     self.store.storage_size()
 
     def test_manual_choices_survive_refresh_and_threshold_changes(self):
-        first, second = self.item(), self.item()
-        self.command("--associate", str(first.id), str(second.id))
+        first = self.item(path="/music/first.flac")
+        second = self.item(path="/music/second.flac")
+        self.command("--associate", os.fsdecode(first.path), os.fsdecode(second.path))
         self.store.put(first.id, second.id, 0.1)
         self.assertEqual(effective_score(self.store.get(first.id, second.id)), 1)
         self.assertEqual(
             [(item.id, score) for item, score in self.plugin.similar_items(self.lib, first, 1)],
             [(second.id, 1)],
         )
-        self.command("--dissociate", str(first.id), str(second.id), "--force")
+        self.command("--dissociate", "--id", str(first.id), str(second.id), "--force")
         self.store.put(first.id, second.id, 1)
         self.assertEqual(effective_score(self.store.get(first.id, second.id)), 0)
         self.assertEqual(self.plugin.similar_items(self.lib, first, 0.01), [])
 
+    def test_manual_association_accepts_ids_with_flag(self):
+        first, second = self.item(), self.item()
+
+        self.command(
+            "--associate", "-f", "--id", str(first.id), str(second.id)
+        )
+
+        self.assertEqual(self.store.get(first.id, second.id)["manual"], 1)
+
     def test_dissociate_penalty_is_configurable_and_preserves_base_score(self):
-        first, second = self.item(), self.item(title="Different")
+        first = self.item(path="/music/first.flac")
+        second = self.item(title="Different", path="/music/second.flac")
         base_score = 0.7
         self.store.put(first.id, second.id, base_score)
-        self.command("--dissociate", str(first.id), str(second.id), "--force")
+        self.command(
+            "--dissociate", os.fsdecode(first.path), os.fsdecode(second.path), "--force"
+        )
 
         self.plugin.config["dissociate_penalty"] = 0.2
         row = self.store.get(first.id, second.id)
@@ -409,6 +422,7 @@ class SimilarityTest(unittest.TestCase):
                 self.plugin._dissociate_penalty()
 
     def test_query_scopes_add_and_overwrite_confirmation(self):
+        self.plugin.config["scope"] = "artist"
         first, second = self.item(), self.item()
         third = self.item(artist="Toto")
         self.command("--add", "-f", "artist:Daft Punk")
@@ -421,6 +435,39 @@ class SimilarityTest(unittest.TestCase):
             score.assert_not_called()
         with patch.object(self.plugin, "_confirm", side_effect=AssertionError):
             self.command("--add", "-f", "artist:Daft Punk")
+
+    def test_scoped_add_includes_matching_items_outside_query(self):
+        self.plugin.config["scope"] = "artist"
+        selected = self.item(artist="Daft Punk", album="Selected")
+        fuzzy_match = self.item(artist="Daft Pank", album="Other")
+        bare_match = self.item(artist="Daft-Punk!", album="Other")
+        unrelated = self.item(artist="Toto", album="Other")
+        self.plugin.config["fuzzy"] = True
+        self.plugin.config["bare_ascii"] = True
+
+        with patch.object(self.plugin, "score", return_value=0.9) as score:
+            self.command("--add", "-f", "album:Selected")
+
+        self.assertIsNotNone(self.store.get(selected.id, fuzzy_match.id))
+        self.assertIsNotNone(self.store.get(selected.id, bare_match.id))
+        self.assertIsNone(self.store.get(selected.id, unrelated.id))
+        self.assertIsNone(self.store.get(fuzzy_match.id, bare_match.id))
+        self.assertEqual(score.call_count, 2)
+
+    def test_add_matrix_keeps_all_pairs_within_query(self):
+        first = self.item(title="First", album="Selected")
+        second = self.item(title="Second", album="Selected")
+        outside = self.item(title="Outside", album="Other")
+
+        with patch.object(self.plugin, "score", return_value=0.9) as score:
+            self.command("--add", "--matrix", "-f", "album:Selected")
+
+        self.assertIsNotNone(self.store.get(first.id, second.id))
+        self.assertIsNone(self.store.get(first.id, outside.id))
+        score.assert_called_once()
+        self.assertEqual(
+            tuple(item.id for item in score.call_args.args), (first.id, second.id)
+        )
 
     def test_unscoped_and_large_computations_warn(self):
         self.item()
@@ -441,7 +488,9 @@ class SimilarityTest(unittest.TestCase):
         first, second, third = self.item(), self.item(), self.item()
         self.store.put(first.id, second.id, 0.9)
         self.store.put(first.id, third.id, 0.2)
-        with patch.object(ui, "colorize", autospec=True, side_effect=lambda _, text: text):
+        with patch.object(
+            ui, "colorize", autospec=True, side_effect=lambda _, text: text
+        ):
             output = self.command("--list", "--thres", "0.8")
         self.assertIn(f"{first.id}:\t{second.id}(0.900000)", output)
         self.assertIn(f"{third.id}:\t\n", output)
@@ -453,6 +502,21 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(rows[2], [str(second.id), "0.900000", "1.000000", "-"])
         self.assertEqual(rows[3], [str(third.id), "0.200000", "-", "1.000000"])
         self.assertNotIn("\t", matrix[0])
+
+    def test_scoped_list_includes_similar_items_outside_query(self):
+        outside = self.item(album="Thriller", path="album/thriller.flac")
+        selected = self.item(album="Thriller 40", path="album/thriller-40.flac")
+        self.store.put(outside.id, selected.id, 0.8)
+
+        with patch.object(
+            ui, "colorize", autospec=True, side_effect=lambda _, text: text
+        ):
+            output = self.command(
+                "--list", "--thres", "0.1", "album:Thriller 40"
+            )
+
+        self.assertIn(f"{selected.id}:\t{outside.id}(0.800000)", output)
+        self.assertNotIn(f"{outside.id}:\t", output)
 
     def test_non_matrix_lists_order_neighbors_by_effective_score(self):
         first = self.item(path="album/first.flac")
@@ -576,17 +640,20 @@ class SimilarityTest(unittest.TestCase):
 
     def test_invalid_commands(self):
         first = self.item()
+        second = self.item()
         for args in (
             ("--add", "--list"),
-            ("--add", "--matrix"),
             ("--size", "--list"),
             ("--size", "--matrix"),
             ("--size", "--debug"),
+            ("--remove", "--matrix"),
             ("--size", "artist:Daft Punk"),
             ("--size", "--thres", "0.8"),
-            ("--associate", str(first.id), str(first.id)),
-            ("--associate", str(first.id), "999"),
-            ("--associate", str(first.id), "999", "artist:Daft Punk"),
+            ("--associate", "--id", str(first.id), str(first.id)),
+            ("--associate", "--id", str(first.id), "999"),
+            ("--associate", "--id", "invalid", str(second.id)),
+            ("--associate", "--id", str(first.id), str(second.id), "artist:Daft Punk"),
+            ("--list", "--id"),
             ("--thres", "nan"),
         ):
             with self.subTest(args=args), self.assertRaises(ui.UserError):

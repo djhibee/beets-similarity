@@ -11,7 +11,7 @@ import sqlite3
 from beets import config, ui
 from beets.autotag import match
 from beets.autotag.hooks import TrackInfo
-from beets.dbcore.query import InQuery, OrQuery
+from beets.dbcore.query import InQuery, OrQuery, PathQuery
 from beets.library import Item
 from beets.plugins import BeetsPlugin
 from unidecode import unidecode
@@ -416,7 +416,11 @@ class SimilarityPlugin(BeetsPlugin):
             help="display similarity table and index storage in bytes",
         )
         for action in ("associate", "dissociate"):
-            parser.add_option(f"--{action}", nargs=2, type="int", metavar="ID ID")
+            parser.add_option(f"--{action}", action="store_true", default=False)
+        parser.add_option(
+            "--id", action="store_true", default=False,
+            help="interpret --associate/--dissociate operands as item IDs",
+        )
         parser.add_option("-f", "--force", action="store_true", default=False)
         parser.add_option("--matrix", action="store_true", default=False)
         parser.add_option("--debug", action="store_true", default=False)
@@ -432,8 +436,12 @@ class SimilarityPlugin(BeetsPlugin):
         if len(actions) > 1:
             raise ui.UserError("Choose only one similar action")
         action = actions[0] if actions else "list"
-        if (opts.matrix or opts.debug) and action != "list":
-            raise ui.UserError("--matrix and --debug require --list")
+        if opts.id and action not in ("associate", "dissociate"):
+            raise ui.UserError("--id requires --associate or --dissociate")
+        if opts.debug and action != "list":
+            raise ui.UserError("--debug requires --list")
+        if opts.matrix and action not in ("add", "list"):
+            raise ui.UserError("--matrix requires --add or --list")
         if action == "size":
             if args or opts.thres is not None:
                 raise ui.UserError("--size does not accept a query or --thres")
@@ -442,15 +450,45 @@ class SimilarityPlugin(BeetsPlugin):
         threshold = self._threshold(opts.thres)
         store = SimilarityStore(lib)
         if action in ("associate", "dissociate"):
-            if args:
-                raise ui.UserError("Manual associations accept two item IDs, not a query")
-            ids = getattr(opts, action)
-            if ids[0] == ids[1] or any(lib.get_item(i) is None for i in ids):
-                raise ui.UserError("Provide two distinct existing item IDs")
+            if len(args) != 2:
+                raise ui.UserError(
+                    "Manual decisions require two item paths or IDs"
+                )
+            references = args
+            if opts.id:
+                try:
+                    ids = tuple(int(reference) for reference in references)
+                except ValueError as exc:
+                    raise ui.UserError("--id requires two integer item IDs") from exc
+                items = tuple(lib.get_item(item_id) for item_id in ids)
+            else:
+                items = []
+                for path in references:
+                    query = PathQuery("path", os.fsencode(path))
+                    items.append(
+                        next(
+                            (
+                                item
+                                for item in lib.items(query)
+                                if item.path == query.pattern
+                                or (
+                                    not query.case_sensitive
+                                    and item.path.lower() == query.pattern
+                                )
+                            ),
+                            None,
+                        )
+                    )
+                items = tuple(items)
+            if len(items) != 2 or any(item is None for item in items):
+                raise ui.UserError("Provide two existing item paths or IDs")
+            if items[0].id == items[1].id:
+                raise ui.UserError("Provide two distinct existing item paths or IDs")
+            ids = tuple(item.id for item in items)
             old = store.get(*ids)
             if old and not opts.force and not self._confirm("Override existing pair?"):
                 return
-            score = old["score"] if old else self.score(*(lib.get_item(i) for i in ids))
+            score = old["score"] if old else self.score(*items)
             store.put(*ids, score, manual=1 if action == "associate" else -1)
             return
         if action == "remove" and not args:
@@ -461,25 +499,48 @@ class SimilarityPlugin(BeetsPlugin):
         items = sorted(lib.items(args), key=lambda i: i.id)
         if action == "add":
             count = len(items)
-            if not self._warn_work(count, count * (count - 1) // 2, not args, opts.force):
+            if opts.matrix:
+                pairs = list(itertools.combinations(items, 2))
+            else:
+                candidates, matched_name_count = self._refresh_candidates(
+                    lib, {item.id: item for item in items}
+                )
+                pairs_by_key = {}
+                for first in items:
+                    for second in candidates.get(self._scope_values(first), []):
+                        if second.id != first.id:
+                            key = pair_key(first.id, second.id)
+                            pair = tuple(sorted((first, second), key=lambda i: i.id))
+                            pairs_by_key.setdefault(key, pair)
+                pairs = [pairs_by_key[key] for key in sorted(pairs_by_key)]
+
+            total = len(pairs)
+            if not self._warn_work(count, total, not args, opts.force):
                 return
-            selected = {i.id for i in items}
+            pair_keys = {pair_key(first.id, second.id) for first, second in pairs}
             existing = any(
-                row["item_a"] in selected and row["item_b"] in selected
+                pair_key(row["item_a"], row["item_b"]) in pair_keys
                 for item in items for row in store.neighbors(item.id)
             )
             if existing and not opts.force and not self._confirm("Refresh existing scores?"):
                 return
-            total = count * (count - 1) // 2
-            artist_count = len(set().union(*(self._artists(item) for item in items)))
-            self._log.info(
-                "Similarity refresh starts: {} pairs to score for {} tracks "
-                "and {} artists matching {} artists.",
-                total, count, artist_count, artist_count,
-            )
-            for progress, (first, second) in enumerate(
-                itertools.combinations(items, 2), 1
-            ):
+            if opts.matrix:
+                artist_count = len(set().union(*(self._artists(item) for item in items)))
+                self._log.info(
+                    "Similarity refresh starts: {} pairs to score for {} tracks "
+                    "and {} artists matching {} artists.",
+                    total, count, artist_count, artist_count,
+                )
+            else:
+                name_count = len(
+                    set().union(*(self._scope_values(item) for item in items))
+                )
+                self._log.info(
+                    "Similarity refresh starts: {} scoped pairs to score for {} "
+                    "tracks and {} scoped values matching {} library values.",
+                    total, count, name_count, matched_name_count,
+                )
+            for progress, (first, second) in enumerate(pairs, 1):
                 store.put(first.id, second.id, self.score(first, second))
                 self._log.info(
                     "Similarity progress: {}/{} pairs scored", progress, total
@@ -491,7 +552,7 @@ class SimilarityPlugin(BeetsPlugin):
             if opts.force or self._confirm("Remove scores touching the selected tracks?"):
                 store.remove(i.id for i in items)
         else:
-            self._list(store, items, threshold, opts.matrix, opts.debug)
+            self._list(lib, store, items, threshold, opts.matrix, opts.debug)
 
     @staticmethod
     def _label(item, debug):
@@ -503,7 +564,7 @@ class SimilarityPlugin(BeetsPlugin):
             "\t", "\\t"
         ).replace("\r", "\\r").replace("\n", "\\n")
 
-    def _list(self, store, items, threshold, matrix, debug):
+    def _list(self, lib, store, items, threshold, matrix, debug):
         labels = {item.id: self._label(item, debug) for item in items}
         penalty = self._dissociate_penalty()
         if matrix:
@@ -538,6 +599,10 @@ class SimilarityPlugin(BeetsPlugin):
             else:
                 for row in store.neighbors(item.id):
                     other = row["item_b"] if row["item_a"] == item.id else row["item_a"]
+                    if other not in labels and not matrix:
+                        other_item = lib.get_item(other)
+                        if other_item:
+                            labels[other] = self._label(other_item, debug)
                     if other in labels:
                         score = effective_score(row, penalty)
                         if score >= threshold:

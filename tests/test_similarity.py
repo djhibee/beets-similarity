@@ -600,18 +600,107 @@ class SimilarityTest(unittest.TestCase):
         first = self.item(artist="Daft Punk")
         second = self.item(artist="Daft Punk")
         self.item(artist="Toto")
-        with patch.object(self.lib, "items", wraps=self.lib.items) as items:
-            self.plugin.refresh_items(self.lib, [first])
-        self.assertEqual(items.call_count, 1)
+        fetched = []
+
+        def query_items(query):
+            self.assertIsNotNone(query.clause()[0])
+            result = list(real_items(query))
+            fetched.extend(item.id for item in result)
+            return result
+
+        real_items = self.lib.items
+        with patch.object(self.lib, "items", side_effect=query_items) as items:
+            self.plugin.refresh_items(self.lib, [first, second])
+        items.assert_called_once()
+        self.assertEqual(set(fetched), {first.id, second.id})
         self.assertEqual(len(self.store.neighbors(first.id)), 1)
 
     def test_non_ascii_exact_artist_refresh_preserves_casefold_matching(self):
-        first = self.item(artist="Beyoncé")
-        second = self.item(artist="BEYONCÉ")
+        for left, right in (
+            ("Beyoncé", "BEYONCÉ"),
+            ("Straße", "STRASSE"),
+            ("K", "\u212a"),
+        ):
+            with self.subTest(left=left, right=right):
+                first = self.item(artist=left)
+                second = self.item(artist=right)
+                with patch.object(self.lib, "items", wraps=self.lib.items) as items:
+                    self.plugin.refresh_items(self.lib, [first])
+                items.assert_called_once()
+                self.assertIsNotNone(items.call_args.args[0].clause()[0])
+                self.assertIsNotNone(self.store.get(first.id, second.id))
+
+    def test_fuzzy_refresh_matches_unique_names_once_and_queries_candidates(self):
+        first = self.item(artist="Daft Punk")
+        second = self.item(artist="Daft Punk")
+        misspelling = self.item(artist="Daft Pank")
+        self.item(artist="Other")
+        self.item(artist="Other")
+        self.plugin.config["fuzzy_artists"] = True
+        from beets.autotag.distance import string_dist
+
+        with (
+            patch("beets.autotag.distance.string_dist", wraps=string_dist) as distance,
+            patch.object(self.lib, "items", wraps=self.lib.items) as items,
+            patch.object(self.plugin, "score", return_value=0.9),
+        ):
+            self.plugin.refresh_items(self.lib, [first, second])
+        self.assertEqual(distance.call_count, 3)
+        items.assert_called_once()
+        query = items.call_args.args[0]
+        self.assertIsNotNone(query.clause()[0])
+        self.assertEqual(
+            {item.id for item in self.lib.items(query)},
+            {first.id, second.id, misspelling.id},
+        )
+        self.assertIsNotNone(self.store.get(first.id, misspelling.id))
+
+    def test_bare_ascii_refresh_preserves_punctuation_and_multi_artist_matches(self):
+        first = self.item(artist="Dvořák")
+        second = self.item(artist="Guest", artists=["Guest", "Dvo-rak!"])
+        other = self.item(artist="Dvorak Ensemble")
+        self.plugin.config["bare_ascii_artists"] = True
         with patch.object(self.lib, "items", wraps=self.lib.items) as items:
             self.plugin.refresh_items(self.lib, [first])
-        self.assertEqual(len(self.store.neighbors(first.id)), 1)
-        items.assert_called_once_with()
+        items.assert_called_once()
+        query = items.call_args.args[0]
+        self.assertIsNotNone(query.clause()[0])
+        self.assertEqual(
+            {item.id for item in self.lib.items(query)}, {first.id, second.id}
+        )
+        self.assertIsNotNone(self.store.get(first.id, second.id))
+        self.assertIsNone(self.store.get(first.id, other.id))
+
+    def test_refresh_queries_literal_artist_names_without_substring_matches(self):
+        first = self.item(artist="A_%\\:~#")
+        second = self.item(artist="Guest", artists=["Guest", first.artist])
+        other = self.item(artist="Guest", artists=["Guest", first.artist + " suffix"])
+        self.plugin.refresh_items(self.lib, [first])
+        self.assertIsNotNone(self.store.get(first.id, second.id))
+        self.assertIsNone(self.store.get(first.id, other.id))
+
+    def test_refresh_without_artists_fetches_no_track_models(self):
+        first = self.item(artist="", artists=[])
+        self.item()
+        with patch.object(self.lib, "items", wraps=self.lib.items) as items:
+            self.plugin.refresh_items(self.lib, [first])
+        items.assert_not_called()
+        self.assertEqual(self.store.neighbors(first.id), [])
+
+    def test_bare_ascii_refresh_batches_large_matching_artist_sets(self):
+        first = self.item(artist="Dvorak")
+        others = [
+            self.item(artist="Dvo" + "!" * index + "rák")
+            for index in range(205)
+        ]
+        self.plugin.config["bare_ascii_artists"] = True
+        with (
+            patch.object(self.lib, "items", wraps=self.lib.items) as items,
+            patch.object(self.plugin, "score", return_value=0.9),
+        ):
+            self.plugin.refresh_items(self.lib, [first])
+        self.assertEqual(items.call_count, 2)
+        self.assertEqual(len(self.store.neighbors(first.id)), len(others))
 
     def test_artist_edit_preserves_out_of_scope_scores_and_manual_choices(self):
         first, second, third = self.item(), self.item(), self.item()

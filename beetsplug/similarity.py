@@ -465,6 +465,10 @@ class SimilarityPlugin(BeetsPlugin):
             if existing and not opts.force and not self._confirm("Refresh existing scores?"):
                 return
             total = count * (count - 1) // 2
+            self._log.info(
+                "Similarity refresh starts: {} pairs to score across {} tracks.",
+                total, count,
+            )
             for progress, (first, second) in enumerate(
                 itertools.combinations(items, 2), 1
             ):

@@ -596,6 +596,58 @@ class SimilarityTest(unittest.TestCase):
         self.assertIsNone(self.store.get(first.id, other.id))
         self.assertIsNotNone(self.store.get(first.id, collaboration.id))
 
+    def test_refresh_logs_exact_total_and_item_and_score_progress(self):
+        first = self.item()
+        second = self.item()
+        third = self.item(artist="Guest", artists=["Guest", "Daft Punk"])
+        fourth = self.item(artist="Toto")
+        fifth = self.item(artist="Toto")
+        self.item(artist="Unrelated")
+        for verbose in (1, 3):
+            with (
+                self.subTest(verbose=verbose),
+                patch.object(self.plugin._log, "info") as info,
+                patch.object(self.plugin._log, "debug") as debug,
+                patch.object(self.plugin._log, "isEnabledFor", return_value=False),
+            ):
+                config["verbose"] = verbose
+                self.plugin.refresh_items(self.lib, [first, second, fourth, first])
+            self.assertEqual(info.call_args_list[0].args[1:], (2, 3, 4))
+            self.assertEqual(
+                [call.args[1:] for call in info.call_args_list[1:]],
+                [(1, 3, first.id), (2, 3, second.id), (3, 3, fourth.id)],
+            )
+            self.assertEqual(
+                [call.args[0] for call in debug.call_args_list],
+                [
+                    f"Similarity score ({index}/4) for items {{}} and {{}}: {{}}"
+                    + (" = 1 - ({} + {}) / 2" if verbose == 3 else "")
+                    for index in range(1, 5)
+                ],
+            )
+            self.assertEqual(
+                {call.args[1:3] for call in debug.call_args_list},
+                {
+                    (first.id, second.id), (first.id, third.id),
+                    (second.id, third.id), (fourth.id, fifth.id),
+                },
+            )
+
+    def test_refresh_logs_zero_scores_for_items_without_matches(self):
+        first = self.item(artist="", artists=[])
+        second = self.item(artist="Solo")
+        with (
+            patch.object(self.plugin._log, "info") as info,
+            patch.object(self.plugin, "score") as score,
+        ):
+            self.plugin.refresh_items(self.lib, [first, second])
+        self.assertEqual(info.call_args_list[0].args[1:], (1, 2, 0))
+        self.assertEqual(
+            [call.args[1:] for call in info.call_args_list[1:]],
+            [(1, 2, first.id), (2, 2, second.id)],
+        )
+        score.assert_not_called()
+
     def test_exact_artist_refresh_queries_only_artist_candidates(self):
         first = self.item(artist="Daft Punk")
         second = self.item(artist="Daft Punk")

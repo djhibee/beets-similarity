@@ -188,6 +188,12 @@ including explicitly computed cross-artist pairs; use `--add` to refresh those
 or `--remove` to discard them. Automatic refreshes intentionally replace computed
 scores without interactive prompts, but never replace manual choices.
 
+Before scoring, each refresh logs the number of distinct target artist names,
+target items, and scores to recompute, excluding self-comparisons and duplicate
+pairs. It then logs `Item i/n` with the item ID. With verbose logging enabled,
+pair score messages include a batch-wide `(i/total)` counter; at verbosity three
+or higher, they also retain the directional-distance formula.
+
 ## Performance and storage
 
 `beet similar --size` reports allocated SQLite page bytes for the `similarity`

@@ -36,8 +36,9 @@ class SimilarityTest(unittest.TestCase):
                 "weights": dict(DEFAULT_WEIGHTS),
                 "warn_items": 1000,
                 "warn_pairs": 500000,
-                "fuzzy_artists": False,
-                "bare_ascii_artists": False,
+                "scope": "title",
+                "fuzzy": False,
+                "bare_ascii": False,
                 "artist_threshold": 0.2,
             }
         )
@@ -591,12 +592,94 @@ class SimilarityTest(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(ui.UserError):
                 self.command(*args)
 
+    def test_default_title_scope_fetches_only_matching_tracks_for_large_artist(self):
+        first = self.item()
+        second = self.item(artist="Other")
+        for index in range(205):
+            self.item(title=f"Different song {index}")
+        fetched = []
+        real_items = self.lib.items
+
+        def query_items(query):
+            self.assertIsNotNone(query.clause()[0])
+            result = list(real_items(query))
+            fetched.extend(item.id for item in result)
+            return result
+
+        with (
+            patch.object(self.lib, "items", side_effect=query_items) as items,
+            patch.object(self.plugin, "score", return_value=0.9) as score,
+            patch.object(self.plugin._log, "info") as info,
+        ):
+            self.plugin.refresh_items(self.lib, [first, second, first])
+        items.assert_called_once()
+        self.assertEqual(set(fetched), {first.id, second.id})
+        score.assert_called_once()
+        self.assertEqual(
+            info.call_args_list[0].args[0].format(*info.call_args_list[0].args[1:]),
+            "Similarity refresh starts: 1 pairs to score for 2 tracks "
+            "and 1 titles matching 1 titles.",
+        )
+        self.assertEqual(len(self.store.neighbors(first.id)), 1)
+
+    def test_title_scope_normalized_and_fuzzy_matching(self):
+        for left, right, bare_ascii, fuzzy in (
+            ("Straße", "STRASSE", False, False),
+            ("Dvořák", "Dvo-rak!", True, False),
+            ("Around the World", "Around the Werld", False, True),
+            ("Beyoncé", "Beyonce", True, True),
+            ("A_%\\:~#", "a_%\\:~#", False, False),
+        ):
+            with self.subTest(left=left, right=right):
+                self.plugin.config["bare_ascii"] = bare_ascii
+                self.plugin.config["fuzzy"] = fuzzy
+                first = self.item(title=left)
+                second = self.item(title=right, artist="Other")
+                other = self.item(title=left + " completely unrelated suffix")
+                with patch.object(self.plugin, "score", return_value=0.9) as score:
+                    self.plugin.refresh_items(self.lib, [first, second])
+                score.assert_called_once()
+                self.assertIsNotNone(self.store.get(first.id, second.id))
+                self.assertIsNone(self.store.get(first.id, other.id))
+
+    def test_title_scope_without_titles_fetches_no_track_models(self):
+        first = self.item(title="")
+        self.item(title="")
+        self.item()
+        with (
+            patch.object(self.lib, "items", wraps=self.lib.items) as items,
+            patch.object(self.plugin, "score") as score,
+        ):
+            self.plugin.refresh_items(self.lib, [first])
+        items.assert_not_called()
+        score.assert_not_called()
+
+    def test_title_edit_preserves_out_of_scope_scores_and_manual_choices(self):
+        first, second, third = self.item(), self.item(), self.item()
+        self.store.put(first.id, second.id, 0.6)
+        self.store.put(first.id, third.id, 0.7, manual=-1)
+        first.title = "Updated title"
+        with patch.object(self.plugin, "score") as score:
+            self.plugin.refresh_items(self.lib, [first])
+        score.assert_not_called()
+        self.assertEqual(self.store.get(first.id, second.id)["score"], 0.6)
+        self.assertEqual(self.store.get(first.id, third.id)["manual"], -1)
+
+    def test_invalid_refresh_scope_is_rejected(self):
+        first = self.item()
+        for scope in ("album", "", "tilte"):
+            with self.subTest(scope=scope):
+                self.plugin.config["scope"] = scope
+                with self.assertRaisesRegex(ui.UserError, "similarity.scope"):
+                    self.plugin.refresh_items(self.lib, [first])
+
     def test_artist_modes_deduplicate_both_queries_and_targets(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item(artist="Beyoncé")
         second = self.item(artist="Beyonce")
         self.item(artist="Other")
-        self.plugin.config["fuzzy_artists"] = True
-        self.plugin.config["bare_ascii_artists"] = True
+        self.plugin.config["fuzzy"] = True
+        self.plugin.config["bare_ascii"] = True
         with (
             patch.object(self.plugin, "score", wraps=self.plugin.score) as score,
             patch.object(self.plugin._log, "info") as info,
@@ -607,6 +690,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(len(self.store.neighbors(first.id)), 1)
 
     def test_exact_artist_scope_and_multi_artist_tracks(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item()
         other = self.item(artist="Toto")
         collaboration = self.item(artist="Guest", artists=["Guest", "Daft Punk"])
@@ -615,6 +699,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertIsNotNone(self.store.get(first.id, collaboration.id))
 
     def test_refresh_logs_exact_total_and_item_and_score_progress(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item()
         second = self.item()
         third = self.item(artist="Guest", artists=["Guest", "Daft Punk"])
@@ -658,6 +743,7 @@ class SimilarityTest(unittest.TestCase):
             )
 
     def test_refresh_logs_zero_scores_for_items_without_matches(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item(artist="", artists=[])
         second = self.item(artist="Solo")
         with (
@@ -673,6 +759,7 @@ class SimilarityTest(unittest.TestCase):
         score.assert_not_called()
 
     def test_exact_artist_refresh_queries_only_artist_candidates(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item(artist="Daft Punk")
         second = self.item(artist="Daft Punk")
         self.item(artist="Toto")
@@ -692,6 +779,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(len(self.store.neighbors(first.id)), 1)
 
     def test_non_ascii_exact_artist_refresh_preserves_casefold_matching(self):
+        self.plugin.config["scope"] = "artist"
         for left, right in (
             ("Beyoncé", "BEYONCÉ"),
             ("Straße", "STRASSE"),
@@ -707,12 +795,13 @@ class SimilarityTest(unittest.TestCase):
                 self.assertIsNotNone(self.store.get(first.id, second.id))
 
     def test_fuzzy_refresh_matches_unique_names_once_and_queries_candidates(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item(artist="Daft Punk")
         second = self.item(artist="Daft Punk")
         misspelling = self.item(artist="Daft Pank")
         self.item(artist="Other")
         self.item(artist="Other")
-        self.plugin.config["fuzzy_artists"] = True
+        self.plugin.config["fuzzy"] = True
         from beets.autotag.distance import string_dist
 
         with (
@@ -734,10 +823,11 @@ class SimilarityTest(unittest.TestCase):
         self.assertIsNotNone(self.store.get(first.id, misspelling.id))
 
     def test_bare_ascii_refresh_preserves_punctuation_and_multi_artist_matches(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item(artist="Dvořák")
         second = self.item(artist="Guest", artists=["Guest", "Dvo-rak!"])
         other = self.item(artist="Dvorak Ensemble")
-        self.plugin.config["bare_ascii_artists"] = True
+        self.plugin.config["bare_ascii"] = True
         with (
             patch.object(self.lib, "items", wraps=self.lib.items) as items,
             patch.object(self.plugin._log, "info") as info,
@@ -754,6 +844,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertIsNone(self.store.get(first.id, other.id))
 
     def test_refresh_queries_literal_artist_names_without_substring_matches(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item(artist="A_%\\:~#")
         second = self.item(artist="Guest", artists=["Guest", first.artist])
         other = self.item(artist="Guest", artists=["Guest", first.artist + " suffix"])
@@ -762,6 +853,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertIsNone(self.store.get(first.id, other.id))
 
     def test_refresh_without_artists_fetches_no_track_models(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item(artist="", artists=[])
         self.item()
         with (
@@ -774,12 +866,13 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(self.store.neighbors(first.id), [])
 
     def test_bare_ascii_refresh_batches_large_matching_artist_sets(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item(artist="Dvorak")
         others = [
             self.item(artist="Dvo" + "!" * index + "rák")
             for index in range(205)
         ]
-        self.plugin.config["bare_ascii_artists"] = True
+        self.plugin.config["bare_ascii"] = True
         with (
             patch.object(self.lib, "items", wraps=self.lib.items) as items,
             patch.object(self.plugin, "score", return_value=0.9),
@@ -789,6 +882,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(len(self.store.neighbors(first.id)), len(others))
 
     def test_artist_edit_preserves_out_of_scope_scores_and_manual_choices(self):
+        self.plugin.config["scope"] = "artist"
         first, second, third = self.item(), self.item(), self.item()
         self.store.put(first.id, second.id, 1)
         self.store.put(first.id, third.id, 1, manual=-1)
@@ -806,6 +900,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(self.store.get(first.id, second.id)["score"], 0.6)
 
     def test_singular_artist_edit_is_used_with_populated_plural_artists(self):
+        self.plugin.config["scope"] = "artist"
         first = self.item(artist="Old Artist", artists=["Old Artist"])
         second = self.item(artist="New Artist")
         first.artist = "New Artist"

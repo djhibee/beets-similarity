@@ -184,8 +184,9 @@ class SimilarityPlugin(BeetsPlugin):
                 "weights": DEFAULT_WEIGHTS,
                 "warn_items": 1000,
                 "warn_pairs": 500000,
-                "fuzzy_artists": False,
-                "bare_ascii_artists": False,
+                "scope": "title",
+                "fuzzy": False,
+                "bare_ascii": False,
                 "artist_threshold": 0.2,
             }
         )
@@ -562,24 +563,36 @@ class SimilarityPlugin(BeetsPlugin):
         return (set(item.get("artists") or []) | {item.artist}) - {"", None}
 
     @staticmethod
-    def _bare(artist):
-        return "".join(c for c in unidecode(artist).casefold() if c.isalnum())
+    def _bare(value):
+        return "".join(c for c in unidecode(value).casefold() if c.isalnum())
+
+    def _scope(self):
+        scope = self.config["scope"].get(str)
+        if scope not in ("artist", "title"):
+            raise ui.UserError('similarity.scope must be "artist" or "title"')
+        return scope
+
+    def _scope_values(self, item):
+        if self._scope() == "artist":
+            return frozenset(self._artists(item))
+        return frozenset({item.title} - {"", None})
 
     def _refresh_candidates(self, lib, targets):
-        """Match distinct artist values before fetching any track models."""
+        """Match distinct scoped values before fetching any track models."""
         from beets.autotag.distance import string_dist
 
-        scopes = {frozenset(self._artists(item)) for item in targets.values()}
-        artist_names = set().union(*scopes)
-        if not artist_names:
+        fields = ("artist", "artists") if self._scope() == "artist" else ("title",)
+        scopes = {self._scope_values(item) for item in targets.values()}
+        target_names = set().union(*scopes)
+        if not target_names:
             return {scope: [] for scope in scopes}, 0
-        fuzzy = self.config["fuzzy_artists"].get(bool)
-        bare_ascii = self.config["bare_ascii_artists"].get(bool)
+        fuzzy = self.config["fuzzy"].get(bool)
+        bare_ascii = self.config["bare_ascii"].get(bool)
         threshold = self._number("artist_threshold") if fuzzy else 0.0
 
         library_names = {}
         with lib.transaction() as tx:
-            for field in ("artist", "artists"):
+            for field in fields:
                 rows = tx.query(
                     f"SELECT DISTINCT {field} FROM items "
                     f"WHERE {field} IS NOT NULL AND {field} != ''"
@@ -605,7 +618,7 @@ class SimilarityPlugin(BeetsPlugin):
                     bare_index.setdefault(bare, set()).add(name)
         matches = {}
         matched_names = set()
-        for name in artist_names:
+        for name in target_names:
             names = set(exact_index.get(name.casefold(), ()))
             if bare_ascii:
                 names.update(bare_index.get(self._bare(name), ()))
@@ -620,13 +633,13 @@ class SimilarityPlugin(BeetsPlugin):
         for scope in scopes:
             values = sorted(set().union(*(matches[name] for name in scope)))
             selected = {}
-            # Bound SQL parameters and expression size for large artist batches.
+            # Bound SQL parameters and expression size for large matching batches.
             for start in range(0, len(values), 200):
                 batch = values[start : start + 200]
                 query = OrQuery(
                     [
                         InQuery(field, [value for key, value in batch if key == field])
-                        for field in ("artist", "artists")
+                        for field in fields
                         if any(key == field for key, _ in batch)
                     ]
                 )
@@ -635,15 +648,15 @@ class SimilarityPlugin(BeetsPlugin):
         return candidates, len(matched_names)
 
     def refresh_items(self, lib, items):
-        """Refresh incident artist-scoped pairs once per batch, preserving overrides."""
+        """Refresh incident scoped pairs once per batch, preserving overrides."""
         targets = {item.id: item for item in items if item.id}
         if not targets:
             return
-        candidates, matched_artist_count = self._refresh_candidates(lib, targets)
+        candidates, matched_name_count = self._refresh_candidates(lib, targets)
         use_refresh_state = self.config["refresh_state"].get(bool)
         store = SimilarityStore(lib, refresh_state=use_refresh_state)
         estimate = sum(
-            len(candidates[frozenset(self._artists(item))])
+            len(candidates[self._scope_values(item)])
             for item in targets.values()
         )
         if (
@@ -655,8 +668,8 @@ class SimilarityPlugin(BeetsPlugin):
             )
 
         def matching_items(first):
-            for second in candidates[frozenset(self._artists(first))]:
-                # Both artist modes form a union, and targeted pairs run only once.
+            for second in candidates[self._scope_values(first)]:
+                # Matching modes form a union, and targeted pairs run only once.
                 if second.id != first.id and not (
                     second.id in targets and second.id < first.id
                 ):
@@ -665,11 +678,12 @@ class SimilarityPlugin(BeetsPlugin):
         total = sum(
             1 for first in targets.values() for second in matching_items(first)
         )
-        artist_count = len(set().union(*(self._artists(i) for i in targets.values())))
+        name_count = len(set().union(*(self._scope_values(i) for i in targets.values())))
+        label = "artists" if self._scope() == "artist" else "titles"
         self._log.info(
             "Similarity refresh starts: {} pairs to score for {} tracks "
-            "and {} artists matching {} artists.",
-            total, len(targets), artist_count, matched_artist_count,
+            f"and {{}} {label} matching {{}} {label}.",
+            total, len(targets), name_count, matched_name_count,
         )
         progress = 0
         for index, first in enumerate(targets.values(), 1):

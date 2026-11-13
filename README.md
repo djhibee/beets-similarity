@@ -5,6 +5,10 @@ Compare **tracks in your local beets library**, using
 is queried. Scores are stored in a new `similarity` table in
 the existing beets database; your tags and global autotagger settings are not
 modified.
+Distance computation per fields is fixed by beets:
+- title and artist use edit-distance (add_string)
+- length is a borned ratio (add_ratio, configurable via match.track_length_grace and track_length_max of beets),
+- track_id, track and disc are binaries.
 
 ## Installation
 
@@ -46,14 +50,15 @@ By default, `--add` computes scores from each track in the matched query to
 tracks across the library that share its configured scope (artist or title),
 including fuzzy and bare-ASCII matches when enabled. The query determines which
 tracks are refreshed; it does not limit their matching candidates.
-`--add --matrix` retains the all-pairs behavior, computing every unordered pair
+`--add --matrix` however define a all-pairs behavior, computing every unordered pair
 within the matched query. All normal beets track queries work. An empty query
-selects all tracks. Overwriting scores, changing an existing manual choice, and
+selects all tracks. 
+Overwriting scores, changing an existing manual choice, and
 removing scores require confirmation unless `-f`/`--force` is supplied.
 Refreshes preserve manual choices; remove the pair's scores first to clear a
 manual choice. Scoped removal deletes all pairs touching the selected tracks,
 including pairs with tracks outside the query. Full reset clears all similarity
-pairs without loading or sorting library tracks.
+pairs.
 
 ### Score and output conventions
 
@@ -136,11 +141,11 @@ similarity:
     track_title: 4.0
     track_artist: 3.0
     track_length: 2.0
-    track_id: 4.0
-    track_index: 0.5
-    medium: 0.5
+    track_id: 4.0 # mb_trackid penalty
+    track_index: 0.5 # track number penalty
+    medium: 0.5 # disc penalty
     album: 2.0
-    release_group: 6.0
+    release_group: 6.0 #mb_releasegroupid penalty
     acoustic: 8.0
     data_source: 0.0
 ```
@@ -175,16 +180,16 @@ unchanged by configuration edits until refreshed.
 ### Automatic computation
 
 `auto: yes` adds an import stage to compute imported tracks against local tracks
-sharing their title by default (`scope: title`). Set `scope: artist` to use the
-previous artist-based matching instead. Both album imports and singleton imports
-are handled as individual tracks. With `refresh_state: yes` (the default), after an item's
-first refresh, beets' `database_change`
-event queues it only when similarity-relevant metadata changes; unrelated
-edits such as changing the composer do not trigger a refresh. Items without a
+sharing their title by default (`scope: title`). Set `scope: artist` to use
+artist-based matching instead. Both album imports and singleton imports
+are handled as individual tracks. 
+With `refresh_state: yes` (the default), after an item's first refresh, 
+beets' `database_change` event queues it only when similarity-relevant metadata changes; 
+unrelated edits such as changing the composer do not trigger a refresh. Items without a
 recorded refresh baseline are refreshed once. Queued changes are refreshed at
 command exit, coalescing repeated stores. For long-running integrations, call
-`refresh_items(lib, items)` explicitly. Set `refresh_state: no` to disable the
-stored signatures and refresh after every item database change.
+`refresh_items(lib, items)` explicitly. 
+Set `refresh_state: no` to disable the stored signatures and refresh after every item database change.
 Set `remove_on_delete: yes` to list and confirm before removing similarity
 pairs that touch a deleted item. This is disabled by default.
 
@@ -194,8 +199,7 @@ considering both `artist` and `artists`.
 `fuzzy` additionally uses beets' string distance with the maximum
 `fuzzy_thres` (applies to whichever scope, artist or title, is matched); `bare_ascii` additionally
 compares transliterated, case-folded values with punctuation/whitespace removed.
-These replace the former `fuzzy_artists` and `bare_ascii_artists` options:
-rename those keys in existing configurations. For example, `scope: title` with
+For example, `scope: title` with
 `bare_ascii: yes` matches `Dvořák` and `Dvo-rak!` titles regardless of artist.
 When both modes are enabled, their results are unioned by item ID, so a pair is
 scored once per refresh batch. Tracks with an empty title (or no artists in
@@ -205,16 +209,6 @@ including explicitly computed cross-scope pairs; use `--add --matrix` to refresh
 all pairs within a query or `--remove` to discard pairs. Automatic refreshes
 intentionally replace computed scores without interactive prompts, but never
 replace manual choices.
-
-Before scoring, each refresh logs the number of pairs to score, target tracks,
-distinct target titles or artist names, and distinct library values matched by the
-scoped matching algorithm. Matched values are counted once across all targets and
-matching modes; unrelated co-artists on matching tracks are not counted.
-Fuzzy or bare-ASCII matching can expand the matched value count, as can
-case-insensitive spelling variants. Pair counts exclude self-comparisons and
-duplicate pairs. It then logs `Item i/n` with the item ID. With verbose logging enabled,
-pair score messages include a batch-wide `(i/total)` counter; at verbosity three
-or higher, they also retain the directional-distance formula.
 
 ## Performance and storage
 

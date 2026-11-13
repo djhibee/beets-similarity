@@ -324,7 +324,7 @@ class SimilarityPlugin(BeetsPlugin):
                 source.id, target.id, key, values, weights[key], penalty, penalty / 2,
             )
 
-    def score(self, first, second):
+    def score(self, first, second, *, progress=None):
         """Return symmetric similarity in [0, 1]; never inspect audio quality."""
         weights = {
             key: self.config["weights"][key].as_number() for key in DEFAULT_WEIGHTS
@@ -357,14 +357,17 @@ class SimilarityPlugin(BeetsPlugin):
             distances.append(float(dist))
             self._log_distance(source, target, dist, weights)
         score = max(0.0, min(1.0, 1.0 - sum(distances) / 2))
+        label = "Similarity score"
+        if progress is not None:
+            label += f" ({progress[0]}/{progress[1]})"
         if config["verbose"].get(int) >= 3:
             self._log.debug(
-                "Similarity score for items {} and {}: {} = 1 - ({} + {}) / 2",
+                label + " for items {} and {}: {} = 1 - ({} + {}) / 2",
                 first.id, second.id, score, *distances,
             )
         else:
             self._log.debug(
-                "Similarity score for items {} and {}: {}", first.id, second.id, score
+                label + " for items {} and {}: {}", first.id, second.id, score
             )
         return score
 
@@ -641,14 +644,33 @@ class SimilarityPlugin(BeetsPlugin):
             self._log.warning(
                 "Automatic similarity refresh: up to {} candidate comparisons", estimate
             )
-        for first in targets.values():
+
+        def matching_items(first):
             for second in candidates[frozenset(self._artists(first))]:
-                if first.id == second.id:
-                    continue
                 # Both artist modes form a union, and targeted pairs run only once.
-                if second.id in targets and second.id < first.id:
-                    continue
-                store.put(first.id, second.id, self.score(first, second))
+                if second.id != first.id and not (
+                    second.id in targets and second.id < first.id
+                ):
+                    yield second
+
+        total = sum(
+            1 for first in targets.values() for second in matching_items(first)
+        )
+        artist_count = len(set().union(*(self._artists(i) for i in targets.values())))
+        self._log.info(
+            "Automatic similarity refresh: {} artists across {} items; "
+            "{} similarity scores to recompute",
+            artist_count, len(targets), total,
+        )
+        progress = 0
+        for index, first in enumerate(targets.values(), 1):
+            self._log.info("Item {}/{}: {}", index, len(targets), first.id)
+            for second in matching_items(first):
+                progress += 1
+                store.put(
+                    first.id, second.id,
+                    self.score(first, second, progress=(progress, total)),
+                )
         if use_refresh_state:
             for item in targets.values():
                 store.set_refresh_signature(item.id, self._refresh_signature(item))

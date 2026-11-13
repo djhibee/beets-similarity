@@ -207,6 +207,20 @@ An unscoped computation, at least `warn_items` selected tracks, or at least
 prompt, not the warning). Automatic batches log warnings for large candidate
 sets but do not prompt.
 
+Automatic refreshes read distinct stored `artist` and `artists` values, match
+each unique target artist once, then use beets SQL queries to fetch only tracks
+in that artist scope. Targets sharing the same artist credits reuse the result.
+This applies to exact Unicode case-folding, fuzzy, and bare-ASCII matching:
+there is no full-library track-model fallback. Distinct-value discovery still
+reads the library's artist columns; fuzzy matching compares unique artist names,
+not every track against every imported track.
+
+The `fuzzy` and `bareasc` query plugins are not required. Their `~` and `#`
+queries have different matching semantics: fuzzy queries use a similarity ratio
+and Python-side filtering, while bare-ASCII queries use substring/smart-case
+matching. Automatic similarity refreshes retain `artist_threshold` and the
+exact normalized-name matching described above.
+
 Storage is sparse: only computed pairs are saved, once per unordered pair, with
 a composite primary key and a reverse-lookup index. A fully populated 50k matrix
 has a **10 GB decimal raw float64 score payload alone**. With IDs, manual flags,

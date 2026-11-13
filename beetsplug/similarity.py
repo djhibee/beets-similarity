@@ -11,6 +11,7 @@ import sqlite3
 from beets import config, ui
 from beets.autotag import match
 from beets.autotag.hooks import TrackInfo
+from beets.dbcore.query import InQuery, OrQuery
 from beets.library import Item
 from beets.plugins import BeetsPlugin
 from unidecode import unidecode
@@ -554,33 +555,85 @@ class SimilarityPlugin(BeetsPlugin):
     def _bare(artist):
         return "".join(c for c in unidecode(artist).casefold() if c.isalnum())
 
-    def _artist_matches(self, first, second):
-        # Reuse beets' string heuristic for optional fuzzy artist matching.
+    def _refresh_candidates(self, lib, targets):
+        """Match distinct artist values before fetching any track models."""
         from beets.autotag.distance import string_dist
 
-        for left in self._artists(first):
-            for right in self._artists(second):
-                if left.casefold() == right.casefold():
-                    return True
-                if self.config["fuzzy_artists"].get(bool) and string_dist(
-                    left, right
-                ) <= self._number("artist_threshold"):
-                    return True
-                if self.config["bare_ascii_artists"].get(bool):
-                    bare = self._bare(left)
-                    if bare and bare == self._bare(right):
-                        return True
-        return False
+        scopes = {frozenset(self._artists(item)) for item in targets.values()}
+        artist_names = set().union(*scopes)
+        if not artist_names:
+            return {scope: [] for scope in scopes}
+        fuzzy = self.config["fuzzy_artists"].get(bool)
+        bare_ascii = self.config["bare_ascii_artists"].get(bool)
+        threshold = self._number("artist_threshold") if fuzzy else 0.0
+
+        library_names = {}
+        with lib.transaction() as tx:
+            for field in ("artist", "artists"):
+                rows = tx.query(
+                    f"SELECT DISTINCT {field} FROM items "
+                    f"WHERE {field} IS NOT NULL AND {field} != ''"
+                )
+                for row in rows:
+                    value = row[field]
+                    names = (
+                        Item._fields["artists"].from_sql(value)
+                        if field == "artists"
+                        else [value]
+                    )
+                    for name in names:
+                        if name:
+                            library_names.setdefault(name, set()).add((field, value))
+
+        exact_index = {}
+        bare_index = {}
+        for name, values in library_names.items():
+            exact_index.setdefault(name.casefold(), set()).update(values)
+            if bare_ascii:
+                bare = self._bare(name)
+                if bare:
+                    bare_index.setdefault(bare, set()).update(values)
+        matches = {}
+        for name in artist_names:
+            values = set(exact_index.get(name.casefold(), ()))
+            if bare_ascii:
+                values.update(bare_index.get(self._bare(name), ()))
+            if fuzzy:
+                for other, other_values in library_names.items():
+                    if string_dist(name, other) <= threshold:
+                        values.update(other_values)
+            matches[name] = values
+
+        candidates = {}
+        for scope in scopes:
+            values = sorted(set().union(*(matches[name] for name in scope)))
+            selected = {}
+            # Bound SQL parameters and expression size for large artist batches.
+            for start in range(0, len(values), 200):
+                batch = values[start : start + 200]
+                query = OrQuery(
+                    [
+                        InQuery(field, [value for key, value in batch if key == field])
+                        for field in ("artist", "artists")
+                        if any(key == field for key, _ in batch)
+                    ]
+                )
+                selected.update((item.id, item) for item in lib.items(query))
+            candidates[scope] = list(selected.values())
+        return candidates
 
     def refresh_items(self, lib, items):
         """Refresh incident artist-scoped pairs once per batch, preserving overrides."""
         targets = {item.id: item for item in items if item.id}
         if not targets:
             return
-        candidates = list(lib.items())
+        candidates = self._refresh_candidates(lib, targets)
         use_refresh_state = self.config["refresh_state"].get(bool)
         store = SimilarityStore(lib, refresh_state=use_refresh_state)
-        estimate = len(targets) * max(0, len(candidates) - 1)
+        estimate = sum(
+            len(candidates[frozenset(self._artists(item))])
+            for item in targets.values()
+        )
         if (
             len(targets) >= self.config["warn_items"].get(int)
             or estimate >= self.config["warn_pairs"].get(int)
@@ -589,14 +642,13 @@ class SimilarityPlugin(BeetsPlugin):
                 "Automatic similarity refresh: up to {} candidate comparisons", estimate
             )
         for first in targets.values():
-            for second in candidates:
+            for second in candidates[frozenset(self._artists(first))]:
                 if first.id == second.id:
                     continue
                 # Both artist modes form a union, and targeted pairs run only once.
                 if second.id in targets and second.id < first.id:
                     continue
-                if self._artist_matches(first, second):
-                    store.put(first.id, second.id, self.score(first, second))
+                store.put(first.id, second.id, self.score(first, second))
         if use_refresh_state:
             for item in targets.values():
                 store.set_refresh_signature(item.id, self._refresh_signature(item))

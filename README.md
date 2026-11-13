@@ -46,6 +46,7 @@ an existing manual choice, and removing scores require confirmation unless
 `-f`/`--force` is supplied. Refreshes preserve manual choices; remove the pair's
 scores first to clear a manual choice. Scoped removal deletes all pairs
 touching the selected tracks, including pairs with tracks outside the query.
+Full reset clears all similarity pairs without loading or sorting library tracks.
 The start log reports pairs, tracks, and distinct artist names as
 `Similarity refresh starts: 66 pairs to score for 12 tracks and 3 artists matching 3 artists.`
 For `--add`, both artist counts are equal because it does not expand the query.

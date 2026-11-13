@@ -559,12 +559,18 @@ class SimilarityTest(unittest.TestCase):
         self.store.put(second.id, third.id, 1)
         self.command("--remove", "-f", f"id:{first.id}")
         self.assertIsNone(self.store.get(first.id, second.id))
-        with patch.object(self.plugin, "_confirm", return_value=False) as confirm:
+        with patch.object(self.lib, "items") as items, patch.object(
+            self.plugin, "_confirm", return_value=False
+        ) as confirm:
             self.command("--remove", "-f")
+        items.assert_not_called()
         confirm.assert_called_once()
         self.assertIsNotNone(self.store.get(second.id, third.id))
-        with patch.object(self.plugin, "_confirm", return_value=True):
+        with patch.object(self.lib, "items") as items, patch.object(
+            self.plugin, "_confirm", return_value=True
+        ):
             self.command("--remove", "-f")
+        items.assert_not_called()
         self.assertIsNone(self.store.get(second.id, third.id))
 
     def test_invalid_commands(self):

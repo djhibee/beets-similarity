@@ -317,6 +317,11 @@ class SimilarityPlugin(BeetsPlugin):
     def _fingerprint_bytes(value):
         return value.encode("ascii") if isinstance(value, str) else value
 
+    def _trace(self, message, *args):
+        """Progress logs for long phases, only shown with -vvv."""
+        if config["verbose"].get(int) >= 3:
+            self._log.info(message, *args)
+
     def _log_distance(self, source, target, dist, weights):
         if config["verbose"].get(int) < 3 or not self._log.isEnabledFor(logging.DEBUG):
             return
@@ -563,12 +568,21 @@ class SimilarityPlugin(BeetsPlugin):
                             pair = tuple(sorted((first, second), key=lambda i: i.id))
                             pairs_by_key.setdefault(key, pair)
                 pairs = [pairs_by_key[key] for key in sorted(pairs_by_key)]
+                self._trace("Similarity: {} candidate pairs built", len(pairs))
 
             if not opts.force:
-                done = {
-                    pair_key(row["item_a"], row["item_b"])
-                    for item in items for row in store.neighbors(item.id)
-                }
+                self._trace("Similarity: looking up already scored pairs")
+                done = set()
+                for index, item in enumerate(items, 1):
+                    done.update(
+                        pair_key(row["item_a"], row["item_b"])
+                        for row in store.neighbors(item.id)
+                    )
+                    if index % 1000 == 0 or index == count:
+                        self._trace(
+                            "Similarity: checked {}/{} tracks for existing scores",
+                            index, count,
+                        )
                 remaining = []
                 for first, second in pairs:
                     if pair_key(first.id, second.id) in done:
@@ -637,9 +651,13 @@ class SimilarityPlugin(BeetsPlugin):
                         (begin, min(begin + size, start + len(chunk)))
                         for begin in range(start, start + len(chunk), size)
                     ]
-                    scores = [
-                        score for part in pool.map(_score_slice, bounds) for score in part
-                    ]
+                    scores = []
+                    for part in pool.imap(_score_slice, bounds):
+                        scores.extend(part)
+                        self._trace(
+                            "Similarity batch {}/{}: {}/{} pairs scored",
+                            number, batches, start + len(scores), total,
+                        )
                 store.put_many(
                     (first.id, second.id, score)
                     for (first, second), score in zip(chunk, scores)
@@ -756,6 +774,9 @@ class SimilarityPlugin(BeetsPlugin):
         bare_ascii = self.config["bare_ascii"].get(bool)
         threshold = self._number("fuzzy_thres") if fuzzy else 0.0
 
+        self._trace(
+            "Similarity: matching {} scoped values against the library", len(target_names)
+        )
         library_names = {}
         with lib.transaction() as tx:
             for field in fields:
@@ -784,7 +805,11 @@ class SimilarityPlugin(BeetsPlugin):
                     bare_index.setdefault(bare, set()).add(name)
         matches = {}
         matched_names = set()
-        for name in target_names:
+        for number, name in enumerate(target_names, 1):
+            if number % 500 == 0:
+                self._trace(
+                    "Similarity: matched {}/{} scoped values", number, len(target_names)
+                )
             names = set(exact_index.get(name.casefold(), ()))
             if bare_ascii:
                 names.update(bare_index.get(self._bare(name), ()))
@@ -795,8 +820,11 @@ class SimilarityPlugin(BeetsPlugin):
             matched_names.update(names)
             matches[name] = set().union(*(library_names[other] for other in names))
 
+        self._trace("Similarity: fetching candidate tracks for {} scopes", len(scopes))
         candidates = {}
-        for scope in scopes:
+        for number, scope in enumerate(scopes, 1):
+            if number % 500 == 0:
+                self._trace("Similarity: fetched {}/{} scopes", number, len(scopes))
             values = sorted(set().union(*(matches[name] for name in scope)))
             selected = {}
             # Bound SQL parameters and expression size for large matching batches.

@@ -31,8 +31,10 @@ plugins: [similarity]
 
 ```sh
 beet similar --add artist:"Daft Punk"
-beet similar --add -f artist:"Toto"         # refresh existing scores
+beet similar --add artist:"Toto"            # only scores missing pairs (resumable)
+beet similar --add -f artist:"Toto"         # recompute existing scores too
 beet similar --add --matrix artist:"Daft Punk" # all pairs within the query
+beet similar --add --batch 500 --jobs 4     # 4 worker processes, 500 pairs saved per batch
 beet similar --list artist:"Daft Punk"
 beet similar --list --thres 0.35 artist:"Daft Punk"
 beet similar --list --matrix artist:"Daft Punk"
@@ -53,7 +55,13 @@ tracks are refreshed; it does not limit their matching candidates.
 `--add --matrix` however define a all-pairs behavior, computing every unordered pair
 within the matched query. All normal beets track queries work. An empty query
 selects all tracks. 
-Overwriting scores, changing an existing manual choice, and
+Without `--jobs`, each pair is saved as soon as it is scored. With `--jobs N`,
+pairs are scored `--batch` (default 1000) at a time on N worker processes and each
+batch is saved at once, so an interruption loses at most one batch (fork-based, so not available on Windows); only the main process writes to the
+database.
+
+Re-running `--add` skips pairs that already have a score, so an interrupted
+run can simply be restarted; `-f` recomputes them. Changing an existing manual choice, and
 removing scores require confirmation unless `-f`/`--force` is supplied.
 Refreshes preserve manual choices; remove the pair's scores first to clear a
 manual choice. Scoped removal deletes all pairs touching the selected tracks,

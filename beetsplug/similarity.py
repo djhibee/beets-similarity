@@ -5,6 +5,7 @@ import itertools
 import json
 import logging
 import math
+import multiprocessing
 import os
 import sqlite3
 
@@ -16,6 +17,8 @@ from beets.library import Item
 from beets.plugins import BeetsPlugin
 from unidecode import unidecode
 
+
+DEFAULT_BATCH = 1000
 
 DEFAULT_WEIGHTS = {
     "track_title": 4.0,
@@ -60,6 +63,15 @@ def effective_score(row, dissociate_penalty="to-zero"):
         penalty = row["score"] if dissociate_penalty == "to-zero" else dissociate_penalty
         return max(0.0, row["score"] - penalty)
     return row["score"]
+
+
+_WORK = None
+
+
+def _score_slice(bounds):
+    """Worker entry point; inherits the plugin and pairs through fork."""
+    plugin, pairs = _WORK
+    return [plugin.score(first, second) for first, second in pairs[bounds[0] : bounds[1]]]
 
 
 class SimilarityStore:
@@ -107,6 +119,22 @@ class SimilarityStore:
                 "manual=COALESCE(?, similarity.manual)",
                 (*key, score, manual or 0, manual),
             )
+
+    def put_many(self, rows):
+        """Upsert (first_id, second_id, score) rows in one transaction."""
+        keyed = []
+        for first, second, score in rows:
+            if not math.isfinite(score) or not 0 <= score <= 1:
+                raise ValueError("similarity must be a finite number between 0 and 1")
+            keyed.append((*pair_key(first, second), score))
+        with self.lib.transaction() as tx:
+            for key_a, key_b, score in keyed:
+                tx.mutate(
+                    "INSERT INTO similarity(item_a, item_b, score, manual) "
+                    "VALUES (?, ?, ?, 0) ON CONFLICT(item_a, item_b) "
+                    "DO UPDATE SET score=excluded.score",
+                    (key_a, key_b, score),
+                )
 
     def neighbors(self, item_id):
         with self.lib.transaction() as tx:
@@ -431,6 +459,14 @@ class SimilarityPlugin(BeetsPlugin):
         )
         parser.add_option("-f", "--force", action="store_true", default=False)
         parser.add_option("--matrix", action="store_true", default=False)
+        parser.add_option(
+            "--batch", type="int", default=DEFAULT_BATCH,
+            help="with --add --jobs N>1, pairs scored and saved per batch (default %default)",
+        )
+        parser.add_option(
+            "--jobs", type="int", default=1,
+            help="with --add, number of worker processes scoring pairs",
+        )
         parser.add_option("--debug", action="store_true", default=False)
         parser.add_option("--thres", type="float", help="minimum similarity (0, 1]")
         command.func = self._command
@@ -450,6 +486,12 @@ class SimilarityPlugin(BeetsPlugin):
             raise ui.UserError("--debug requires --list")
         if opts.matrix and action not in ("add", "list"):
             raise ui.UserError("--matrix requires --add or --list")
+        if opts.batch < 1 or opts.jobs < 1:
+            raise ui.UserError("--batch and --jobs must be positive integers")
+        if opts.jobs > 1 and action != "add":
+            raise ui.UserError("--jobs requires --add")
+        if opts.jobs > 1 and "fork" not in multiprocessing.get_all_start_methods():
+            raise ui.UserError("--jobs requires a platform supporting fork")
         if action == "size":
             if args or opts.thres is not None:
                 raise ui.UserError("--size does not accept a query or --thres")
@@ -522,15 +564,24 @@ class SimilarityPlugin(BeetsPlugin):
                             pairs_by_key.setdefault(key, pair)
                 pairs = [pairs_by_key[key] for key in sorted(pairs_by_key)]
 
+            if not opts.force:
+                done = {
+                    pair_key(row["item_a"], row["item_b"])
+                    for item in items for row in store.neighbors(item.id)
+                }
+                remaining = []
+                for first, second in pairs:
+                    if pair_key(first.id, second.id) in done:
+                        self._log.info(
+                            "Similarity skipped: {} <-> {} already scored",
+                            first.id, second.id,
+                        )
+                    else:
+                        remaining.append((first, second))
+                pairs = remaining
+                self._log.info("Similarity: {} pairs left to score", len(pairs))
             total = len(pairs)
             if not self._warn_work(count, total, not args, opts.force):
-                return
-            pair_keys = {pair_key(first.id, second.id) for first, second in pairs}
-            existing = any(
-                pair_key(row["item_a"], row["item_b"]) in pair_keys
-                for item in items for row in store.neighbors(item.id)
-            )
-            if existing and not opts.force and not self._confirm("Refresh existing scores?"):
                 return
             if opts.matrix:
                 artist_count = len(set().union(*(self._artists(item) for item in items)))
@@ -548,11 +599,10 @@ class SimilarityPlugin(BeetsPlugin):
                     "tracks and {} scoped values matching {} library values.",
                     total, count, name_count, matched_name_count,
                 )
-            for progress, (first, second) in enumerate(pairs, 1):
-                store.put(first.id, second.id, self.score(first, second))
-                self._log.info(
-                    "Similarity progress: {}/{} pairs scored", progress, total
-                )
+            # Serial runs save every pair at once; batches only feed worker pools.
+            self._score_batches(
+                store, pairs, opts.batch if opts.jobs > 1 else 1, opts.jobs
+            )
             self._log.info(
                 "Similarity complete: scored {} pairs across {} tracks", total, count
             )
@@ -561,6 +611,49 @@ class SimilarityPlugin(BeetsPlugin):
                 store.remove(i.id for i in items)
         else:
             self._list(lib, store, items, threshold, opts.matrix, opts.debug)
+
+    def _score_batches(self, store, pairs, batch_size, jobs):
+        """Score pairs batch by batch, saving each batch so a rerun resumes."""
+        global _WORK
+        total = len(pairs)
+        batches = math.ceil(total / batch_size)
+        pool = None
+        if jobs > 1 and total:
+            _WORK = (self, pairs)
+            pool = multiprocessing.get_context("fork").Pool(jobs)
+        try:
+            for number, start in enumerate(range(0, total, batch_size), 1):
+                chunk = pairs[start : start + batch_size]
+                if pool is None:
+                    scores = []
+                    for offset, (first, second) in enumerate(chunk, start + 1):
+                        scores.append(self.score(first, second))
+                        self._log.info(
+                            "Similarity progress: {}/{} pairs scored", offset, total
+                        )
+                else:
+                    size = math.ceil(len(chunk) / jobs)
+                    bounds = [
+                        (begin, min(begin + size, start + len(chunk)))
+                        for begin in range(start, start + len(chunk), size)
+                    ]
+                    scores = [
+                        score for part in pool.map(_score_slice, bounds) for score in part
+                    ]
+                store.put_many(
+                    (first.id, second.id, score)
+                    for (first, second), score in zip(chunk, scores)
+                )
+                if pool is not None:
+                    self._log.info(
+                        "Similarity batch {}/{} saved: {}/{} pairs scored",
+                        number, batches, start + len(chunk), total,
+                    )
+        finally:
+            if pool is not None:
+                pool.close()
+                pool.join()
+                _WORK = None
 
     @staticmethod
     def _label(item, debug):

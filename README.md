@@ -101,7 +101,7 @@ noninteractive computation.
 `--matrix` displays all stored scores in an aligned, symmetric square, without
 threshold filtering. It uses `1.000000` for the self-similarity diagonal and
 `-` for an **uncomputed** pair (not zero).
-`--debug` replaces IDs with the final two directories and filename; tabs and
+`--debug` replaces IDs with `(id)` followed by the final two directories and filename; tabs and
 newlines in paths are escaped. Use IDs, not debug paths, for script integration.
 Debug lists apply the same minimum similarity threshold as regular lists
 (`threshold` in configuration, overridden by `--thres`) and color retained scores

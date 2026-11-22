@@ -606,9 +606,10 @@ class SimilarityPlugin(BeetsPlugin):
             return str(item.id)
         path = os.fsdecode(item.path).replace("\\", "/")
         # Escape control characters so every output row remains one physical line.
-        return "/".join(path.split("/")[-3:]).replace(
+        label = "/".join(path.split("/")[-3:]).replace(
             "\t", "\\t"
         ).replace("\r", "\\r").replace("\n", "\\n")
+        return f"({item.id}) {label}"
 
     def _list(self, lib, store, items, threshold, matrix, debug):
         labels = {item.id: self._label(item, debug) for item in items}

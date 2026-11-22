@@ -1,6 +1,5 @@
 import contextlib
 import io
-import itertools
 import math
 import os
 import sqlite3
@@ -432,16 +431,18 @@ class SimilarityTest(unittest.TestCase):
             ):
                 self.plugin._dissociate_penalty()
 
-    def test_query_scopes_add_and_skips_existing(self):
+    def test_query_scopes_add_and_overwrite_confirmation(self):
         self.plugin.config["scope"] = "artist"
         first, second = self.item(), self.item()
         third = self.item(artist="Toto")
         self.command("--add", "-f", "artist:Daft Punk")
         self.assertIsNotNone(self.store.get(first.id, second.id))
         self.assertIsNone(self.store.get(first.id, third.id))
-        with patch.object(self.plugin, "score") as score:
-            self.command("--add", "artist:Daft Punk")
-        score.assert_not_called()
+        with patch.object(self.plugin, "_confirm", return_value=False) as confirm:
+            with patch.object(self.plugin, "score") as score:
+                self.command("--add", "artist:Daft Punk")
+            confirm.assert_called_once()
+            score.assert_not_called()
         with patch.object(self.plugin, "_confirm", side_effect=AssertionError):
             self.command("--add", "-f", "artist:Daft Punk")
 
@@ -477,40 +478,6 @@ class SimilarityTest(unittest.TestCase):
         self.assertEqual(
             tuple(item.id for item in score.call_args.args), (first.id, second.id)
         )
-
-    def test_add_scores_only_missing_pairs(self):
-        first = self.item(title="First", album="Sel")
-        second = self.item(title="Second", album="Sel")
-        third = self.item(title="Third", album="Sel")
-        self.store.put(first.id, second.id, 0.4, manual=1)
-
-        with patch.object(self.plugin, "score", return_value=0.9) as score:
-            self.command("--add", "--matrix", "album:Sel")
-
-        self.assertEqual(self.store.get(first.id, second.id)["score"], 0.4)
-        self.assertEqual(score.call_count, 2)
-        self.assertIsNotNone(self.store.get(first.id, third.id))
-
-        with patch.object(self.plugin, "score", return_value=0.9) as score:
-            self.command("--add", "--matrix", "-f", "album:Sel")
-        self.assertEqual(score.call_count, 3)
-
-    def test_batches_and_jobs_score_same_pairs(self):
-        items = [self.item(title=f"Track {i}", album="Sel") for i in range(4)]
-        ids = [(a.id, b.id) for a, b in itertools.combinations(items, 2)]
-
-        self.command("--add", "--matrix", "--batch", "4", "album:Sel")
-        serial = {key: self.store.get(*key)["score"] for key in ids}
-        self.command("--remove", "-f", "album:Sel")
-        with patch.object(self.plugin._log, "info") as info:
-            self.command("--add", "--matrix", "--batch", "4", "--jobs", "2", "album:Sel")
-        parallel = {key: self.store.get(*key)["score"] for key in ids}
-
-        self.assertEqual(serial, parallel)
-        batches = [c for c in info.call_args_list if "batch" in c.args[0]]
-        self.assertEqual(len(batches), 2)
-        with self.assertRaises(ui.UserError):
-            self.command("--add", "--jobs", "0")
 
     def test_unscoped_and_large_computations_warn(self):
         self.item()

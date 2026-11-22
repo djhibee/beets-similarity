@@ -11,6 +11,7 @@ from unittest.mock import patch
 from beets import config, ui
 from beets.library import Item, Library
 
+from beetsplug import similarity
 from beetsplug.similarity import (
     DEFAULT_WEIGHTS,
     SimilarityPlugin,
@@ -127,17 +128,12 @@ class SimilarityTest(unittest.TestCase):
         with patch.object(self.plugin._log, "info") as info:
             self.command("--add", "-f", "artist:Daft Punk")
         self.assertEqual(info.call_count, 5)
+        self.assertIn("scores saved per track", info.call_args_list[0].args[0])
+        self.assertEqual(info.call_args_list[0].args[1:], (3,))
+        # Pairs are written per track: (index, count, id, pairs saved, total).
         self.assertEqual(
-            info.call_args_list[0].args,
-            (
-                "Similarity refresh starts: {} scoped pairs to score for {} "
-                "tracks and {} scoped values matching {} library values.",
-                3, 3, 1, 1,
-            ),
-        )
-        self.assertEqual(
-            [call.args[1:] for call in info.call_args_list[1:4]],
-            [(1, 3), (2, 3), (3, 3)],
+            [call.args[1:6] for call in info.call_args_list[1:4]],
+            [(1, 3, first.id, 2, 2), (2, 3, second.id, 1, 3), (3, 3, third.id, 0, 3)],
         )
         self.assertIn("complete", info.call_args.args[0])
         self.assertEqual(info.call_args.args[1:], (3, 3))
@@ -800,8 +796,8 @@ class SimilarityTest(unittest.TestCase):
                 "and 2 artists matching 2 artists.",
             )
             self.assertEqual(
-                [call.args[1:] for call in info.call_args_list[1:]],
-                [(1, 3, first.id), (2, 3, second.id), (3, 3, fourth.id)],
+                [call.args[1:5] for call in info.call_args_list[1:]],
+                [(1, 3, first.id, 2), (2, 3, second.id, 1), (3, 3, fourth.id, 1)],
             )
             self.assertEqual(
                 [call.args[0] for call in debug.call_args_list],
@@ -819,6 +815,43 @@ class SimilarityTest(unittest.TestCase):
                 },
             )
 
+    def test_refresh_saves_scores_and_signature_per_item_before_abort(self):
+        self.plugin.config["scope"] = "artist"
+        self.plugin.config["refresh_state"] = True
+        first, second, third = self.item(), self.item(), self.item(artist="Toto")
+        fourth = self.item(artist="Toto")
+        calls = []
+
+        def score(a, b, **kwargs):
+            if calls:
+                raise KeyboardInterrupt
+            calls.append((a.id, b.id))
+            return 0.9
+
+        with patch.object(self.plugin, "score", side_effect=score):
+            with self.assertRaises(KeyboardInterrupt):
+                self.plugin.refresh_items(self.lib, [fourth, third, second, first])
+        self.assertIsNotNone(self.store.get(first.id, second.id))
+        state = SimilarityStore(self.lib, refresh_state=True)
+        self.assertIsNotNone(state.refresh_signature(first.id))
+        self.assertIsNone(state.refresh_signature(third.id))
+        self.assertIsNone(self.store.get(third.id, fourth.id))
+
+    def test_add_saves_each_track_and_resumes_without_rescoring(self):
+        self.plugin.config["scope"] = "artist"
+        first, second, third = self.item(), self.item(), self.item()
+        with patch.object(
+            self.plugin, "score", side_effect=[0.9, 0.8, KeyboardInterrupt]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self.command("--add", "artist:Daft Punk", "-f")
+        self.assertIsNotNone(self.store.get(first.id, second.id))
+        self.assertIsNotNone(self.store.get(first.id, third.id))
+        self.assertIsNone(self.store.get(second.id, third.id))
+        with patch.object(self.plugin, "score", return_value=0.7) as score:
+            self.command("--add", "artist:Daft Punk")
+        score.assert_called_once()
+
     def test_refresh_logs_zero_scores_for_items_without_matches(self):
         self.plugin.config["scope"] = "artist"
         first = self.item(artist="", artists=[])
@@ -830,8 +863,8 @@ class SimilarityTest(unittest.TestCase):
             self.plugin.refresh_items(self.lib, [first, second])
         self.assertEqual(info.call_args_list[0].args[1:], (0, 2, 1, 1))
         self.assertEqual(
-            [call.args[1:] for call in info.call_args_list[1:]],
-            [(1, 2, first.id), (2, 2, second.id)],
+            [call.args[1:5] for call in info.call_args_list[1:]],
+            [(1, 2, first.id, 0), (2, 2, second.id, 0)],
         )
         score.assert_not_called()
 
@@ -883,13 +916,17 @@ class SimilarityTest(unittest.TestCase):
 
         with (
             patch("beets.autotag.distance.string_dist", wraps=string_dist) as distance,
+            patch.object(
+                similarity.rf_process, "extract", wraps=similarity.rf_process.extract
+            ) as extract,
             patch.object(self.lib, "items", wraps=self.lib.items) as items,
             patch.object(self.plugin, "score", return_value=0.9),
             patch.object(self.plugin._log, "info") as info,
         ):
             self.plugin.refresh_items(self.lib, [first, second])
         self.assertEqual(info.call_args_list[0].args[1:], (3, 2, 1, 2))
-        self.assertEqual(distance.call_count, 3)
+        distance.assert_not_called()
+        self.assertEqual(extract.call_count, 1)
         items.assert_called_once()
         query = items.call_args.args[0]
         self.assertIsNotNone(query.clause()[0])
@@ -898,6 +935,22 @@ class SimilarityTest(unittest.TestCase):
             {first.id, second.id, misspelling.id},
         )
         self.assertIsNotNone(self.store.get(first.id, misspelling.id))
+
+    def test_fuzzy_matching_is_identical_without_rapidfuzz(self):
+        self.plugin.config["scope"] = "artist"
+        self.plugin.config["fuzzy"] = True
+        self.plugin.config["fuzzy_thres"] = 0.3
+        names = ["Daft Punk", "Daft Pank", "Daft Punk (live)", "Punk, The", "The Punk"]
+        items = [self.item(artist=name) for name in names]
+        results = []
+        for module in (similarity.rf_process, None):
+            with patch.object(similarity, "rf_process", module):
+                find = self.plugin._candidate_finder(self.lib)
+                results.append(
+                    [sorted(i.id for i in find(frozenset({n}))[0]) for n in names]
+                )
+        self.assertEqual(results[0], results[1])
+        self.assertGreater(len(results[0][0]), 1)
 
     def test_bare_ascii_refresh_preserves_punctuation_and_multi_artist_matches(self):
         self.plugin.config["scope"] = "artist"

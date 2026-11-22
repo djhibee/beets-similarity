@@ -212,6 +212,29 @@ all pairs within a query or `--remove` to discard pairs. Automatic refreshes
 intentionally replace computed scores without interactive prompts, but never
 replace manual choices.
 
+Install the optional `rapidfuzz` extra (`pip install beets-similarity[fuzzy]`) to
+speed up fuzzy matching by orders of magnitude on large libraries. Results are
+identical to beets' `string_dist`, which is a normalized Levenshtein distance
+(lowercase, `&` as `and`, "Name, The" as "the name", accents and punctuation
+ignored) plus reduced weights for some patterns: leading "the", "feat.",
+"(...)", "[...]", "part N", "EP"/"single". `rapidfuzz` only reproduces the
+Levenshtein part, so a pair is compared by `rapidfuzz` only when neither name
+contains one of those patterns (the vast majority). Otherwise `string_dist`
+is used. Without `rapidfuzz`, `string_dist` is always used.
+
+Maintenance: the pattern detection reuses beets' `SD_END_WORDS`, `SD_PATTERNS`
+and `SD_REPLACE`, but the normalization in `_fuzzy_form` (`beetsplug/similarity.py`)
+mirrors the body of `beets.autotag.distance.string_dist`. When upgrading beets,
+check that function for new normalization steps and update `_fuzzy_form`
+accordingly, otherwise `rapidfuzz` results could diverge. The test comparing
+both paths catches such drift only for the cases it covers.
+
+`--add` resolves candidates and saves scores one track at a time, so progress
+is logged per track with elapsed time and ETA, and an interrupted run loses at
+most the current track. Re-running plain `--add` skips pairs already stored,
+which resumes the run. With `refresh_state`, an automatic refresh saves each
+track's scores and refresh signature in the same transaction.
+
 ## Performance and storage
 
 `beet similar --size` reports allocated SQLite page bytes for the `similarity`

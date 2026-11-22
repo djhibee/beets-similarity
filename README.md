@@ -31,7 +31,7 @@ plugins: [similarity]
 
 ```sh
 beet similar --add artist:"Daft Punk"
-beet similar --add -f artist:"Toto"         # refresh existing scores
+beet similar --add -f artist:"Toto"         # recompute all scores (plain --add skips existing pairs)
 beet similar --add --matrix artist:"Daft Punk" # all pairs within the query
 beet similar --list artist:"Daft Punk"
 beet similar --list --thres 0.35 artist:"Daft Punk"

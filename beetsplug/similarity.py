@@ -525,13 +525,22 @@ class SimilarityPlugin(BeetsPlugin):
             total = len(pairs)
             if not self._warn_work(count, total, not args, opts.force):
                 return
-            pair_keys = {pair_key(first.id, second.id) for first, second in pairs}
-            existing = any(
-                pair_key(row["item_a"], row["item_b"]) in pair_keys
-                for item in items for row in store.neighbors(item.id)
-            )
-            if existing and not opts.force and not self._confirm("Refresh existing scores?"):
-                return
+            if not opts.force:
+                scored = {
+                    pair_key(row["item_a"], row["item_b"])
+                    for item in items for row in store.neighbors(item.id)
+                }
+                remaining = []
+                for first, second in pairs:
+                    if pair_key(first.id, second.id) in scored:
+                        self._log.info(
+                            "Similarity skipped existing pair: {} - {}",
+                            first.id, second.id,
+                        )
+                    else:
+                        remaining.append((first, second))
+                pairs = remaining
+                total = len(pairs)
             if opts.matrix:
                 artist_count = len(set().union(*(self._artists(item) for item in items)))
                 self._log.info(

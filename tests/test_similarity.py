@@ -551,10 +551,10 @@ class SimilarityTest(unittest.TestCase):
         )
 
     def test_debug_paths_are_short_and_single_line(self):
-        self.item(path=b"/music/Daft Punk/Homework/song\tname\n.flac")
+        item = self.item(path=b"/music/Daft Punk/Homework/song\tname\n.flac")
         self.assertEqual(
             self.command("--list", "--debug"),
-            "Daft Punk/Homework/song\\tname\\n.flac:\n",
+            f"({item.id}) Daft Punk/Homework/song\\tname\\n.flac:\n",
         )
 
     def test_debug_list_indents_pairs_and_filters_by_threshold(self):
@@ -572,11 +572,12 @@ class SimilarityTest(unittest.TestCase):
             output = self.command("--list", "--debug")
 
         self.assertIn(
-            "Music/album1/toto.flac:\n\t\tMusic/album1/toto.mp3\t\t[text_success](1.000000)",
+            f"({first.id}) Music/album1/toto.flac:\n\t\t({above.id}) Music/album1/toto.mp3"
+            "\t\t[text_success](1.000000)",
             output,
         )
         self.assertNotIn("(0.700000)", output)
-        self.assertIn("Music/album2/toto.flac:\n", output)
+        self.assertIn(f"({below.id}) Music/album2/toto.flac:\n", output)
 
     def test_debug_list_honors_configured_threshold_and_cli_override(self):
         first = self.item(path="album1/first.flac")
@@ -592,8 +593,8 @@ class SimilarityTest(unittest.TestCase):
             with self.subTest(args=args):
                 output = self.command("--list", "--debug", *args)
                 self.assertEqual("(0.700000)" in output, included)
-                self.assertIn("Music/album1/first.flac:\n", output)
-                self.assertIn("Music/album1/second.flac:\n", output)
+                self.assertIn(f"({first.id}) Music/album1/first.flac:\n", output)
+                self.assertIn(f"({second.id}) Music/album1/second.flac:\n", output)
 
     def test_debug_list_uses_beets_color_configuration(self):
         first = self.item(path="album1/toto.flac")

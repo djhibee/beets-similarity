@@ -444,14 +444,21 @@ class SimilarityPlugin(BeetsPlugin):
         if (
             unscoped
             or count >= self.config["warn_items"].get(int)
-            or comparisons >= self.config["warn_pairs"].get(int)
+            or (comparisons or 0) >= self.config["warn_pairs"].get(int)
         ):
-            self._log.warning(
-                "Similarity: {} tracks, up to {} comparisons (quadratic work). "
-                "Use an artist/genre query to restrict the scope.",
-                count,
-                comparisons,
-            )
+            if comparisons is None:
+                self._log.warning(
+                    "Similarity: {} tracks. "
+                    "Use an artist/genre query to restrict the scope.",
+                    count,
+                )
+            else:
+                self._log.warning(
+                    "Similarity: {} tracks, up to {} comparisons (quadratic work). "
+                    "Use an artist/genre query to restrict the scope.",
+                    count,
+                    comparisons,
+                )
             return force or self._confirm("Proceed with this similarity computation?")
         return True
 
@@ -553,8 +560,8 @@ class SimilarityPlugin(BeetsPlugin):
                 comparisons = count * (count - 1) // 2
             else:
                 plan = self._scoped_plan(lib, items)
-                # Candidates are resolved lazily, per item.
-                comparisons = 0
+                # Candidates are resolved lazily, so there is no upfront count.
+                comparisons = None
             if not self._warn_work(count, comparisons, not args, opts.force):
                 return
             self._log.info(

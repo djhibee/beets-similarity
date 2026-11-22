@@ -1,14 +1,18 @@
 """Compare local tracks without changing the global autotagger configuration."""
 
+import datetime
 import hashlib
 import itertools
 import json
 import logging
 import math
 import os
+import re
 import sqlite3
+import time
 
 from beets import config, ui
+from beets.autotag.distance import SD_END_WORDS, SD_PATTERNS, SD_REPLACE
 from beets.autotag import match
 from beets.autotag.hooks import TrackInfo
 from beets.dbcore.query import InQuery, OrQuery, PathQuery
@@ -43,6 +47,29 @@ REFRESH_FIELDS = (
     "mb_releasegroupid",
 )
 ACOUSTIC_REFRESH_FIELDS = ("acoustid_id", "acoustid_fingerprint")
+
+
+try:
+    from rapidfuzz import process as rf_process
+    from rapidfuzz.distance import Levenshtein
+except ImportError:  # optional: falls back to beets' string_dist
+    rf_process = Levenshtein = None
+
+
+def _fuzzy_form(name):
+    """Return (comparable form, needs full string_dist) for a name.
+
+    Without any string_dist pattern, its result is the plain normalized
+    Levenshtein distance of the alphanumeric transliterations.
+    """
+    text = name.lower()
+    for word in SD_END_WORDS:
+        if text.endswith(f", {word}"):
+            text = f"{word} {text[: -len(word) - 2]}"
+    for pat, repl in SD_REPLACE:
+        text = re.sub(pat, repl, text)
+    patterned = any(re.search(pat, text) for pat, _ in SD_PATTERNS)
+    return re.sub(r"[^a-z0-9]", "", unidecode(text).lower()), patterned
 
 
 def pair_key(first, second):
@@ -96,17 +123,31 @@ class SimilarityStore:
         return rows[0] if rows else None
 
     def put(self, first, second, score, manual=None):
-        key = pair_key(first, second)
-        if not math.isfinite(score) or not 0 <= score <= 1:
-            raise ValueError("similarity must be a finite number between 0 and 1")
+        self.save([(first, second, score)], manual=manual)
+
+    def save(self, scores, signatures=(), manual=None):
+        """Write scores and refresh signatures atomically in one transaction."""
+        rows = []
+        for first, second, score in scores:
+            if not math.isfinite(score) or not 0 <= score <= 1:
+                raise ValueError("similarity must be a finite number between 0 and 1")
+            rows.append((*pair_key(first, second), score, manual or 0, manual))
         with self.lib.transaction() as tx:
-            tx.mutate(
-                "INSERT INTO similarity(item_a, item_b, score, manual) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(item_a, item_b) "
-                "DO UPDATE SET score=excluded.score, "
-                "manual=COALESCE(?, similarity.manual)",
-                (*key, score, manual or 0, manual),
-            )
+            for row in rows:
+                tx.mutate(
+                    "INSERT INTO similarity(item_a, item_b, score, manual) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT(item_a, item_b) "
+                    "DO UPDATE SET score=excluded.score, "
+                    "manual=COALESCE(?, similarity.manual)",
+                    row,
+                )
+            for item_id, signature in signatures:
+                tx.mutate(
+                    "INSERT INTO similarity_refresh_state(item_id, signature) "
+                    "VALUES (?, ?) ON CONFLICT(item_id) "
+                    "DO UPDATE SET signature=excluded.signature",
+                    (item_id, signature),
+                )
 
     def neighbors(self, item_id):
         with self.lib.transaction() as tx:
@@ -508,62 +549,50 @@ class SimilarityPlugin(BeetsPlugin):
         if action == "add":
             count = len(items)
             if opts.matrix:
-                pairs = list(itertools.combinations(items, 2))
+                plan = ((first, items[i + 1 :]) for i, first in enumerate(items))
+                comparisons = count * (count - 1) // 2
             else:
-                candidates, matched_name_count = self._refresh_candidates(
-                    lib, {item.id: item for item in items}
-                )
-                pairs_by_key = {}
-                for first in items:
-                    for second in candidates.get(self._scope_values(first), []):
-                        if second.id != first.id:
-                            key = pair_key(first.id, second.id)
-                            pair = tuple(sorted((first, second), key=lambda i: i.id))
-                            pairs_by_key.setdefault(key, pair)
-                pairs = [pairs_by_key[key] for key in sorted(pairs_by_key)]
-
-            total = len(pairs)
-            if not self._warn_work(count, total, not args, opts.force):
+                plan = self._scoped_plan(lib, items)
+                # Candidates are resolved lazily, per item.
+                comparisons = 0
+            if not self._warn_work(count, comparisons, not args, opts.force):
                 return
-            if not opts.force:
-                scored = {
-                    pair_key(row["item_a"], row["item_b"])
-                    for item in items for row in store.neighbors(item.id)
-                }
-                remaining = []
-                for first, second in pairs:
-                    if pair_key(first.id, second.id) in scored:
+            self._log.info(
+                "Similarity refresh starts: {} tracks, scores saved per track.",
+                count,
+            )
+            started = time.monotonic()
+            done = set()
+            scored_pairs = 0
+            for index, (first, candidates) in enumerate(plan, 1):
+                existing = set()
+                if not opts.force:
+                    existing = {
+                        row["item_b"] if row["item_a"] == first.id else row["item_a"]
+                        for row in store.neighbors(first.id)
+                    }
+                scores = []
+                for second in candidates:
+                    if second.id == first.id or second.id in done:
+                        continue
+                    if second.id in existing:
                         self._log.info(
                             "Similarity skipped existing pair: {} - {}",
                             first.id, second.id,
                         )
-                    else:
-                        remaining.append((first, second))
-                pairs = remaining
-                total = len(pairs)
-            if opts.matrix:
-                artist_count = len(set().union(*(self._artists(item) for item in items)))
+                        continue
+                    scores.append((first.id, second.id, self.score(first, second)))
+                store.save(scores)
+                done.add(first.id)
+                scored_pairs += len(scores)
                 self._log.info(
-                    "Similarity refresh starts: {} pairs to score for {} tracks "
-                    "and {} artists matching {} artists.",
-                    total, count, artist_count, artist_count,
-                )
-            else:
-                name_count = len(
-                    set().union(*(self._scope_values(item) for item in items))
-                )
-                self._log.info(
-                    "Similarity refresh starts: {} scoped pairs to score for {} "
-                    "tracks and {} scoped values matching {} library values.",
-                    total, count, name_count, matched_name_count,
-                )
-            for progress, (first, second) in enumerate(pairs, 1):
-                store.put(first.id, second.id, self.score(first, second))
-                self._log.info(
-                    "Similarity progress: {}/{} pairs scored", progress, total
+                    "Similarity track {}/{}: {} ({} pairs saved, {} total, {})",
+                    index, count, first.id, len(scores), scored_pairs,
+                    self._eta(started, index, count),
                 )
             self._log.info(
-                "Similarity complete: scored {} pairs across {} tracks", total, count
+                "Similarity complete: scored {} pairs across {} tracks",
+                scored_pairs, count,
             )
         elif action == "remove":
             if opts.force or self._confirm("Remove scores touching the selected tracks?"):
@@ -659,61 +688,97 @@ class SimilarityPlugin(BeetsPlugin):
             return frozenset(self._artists(item))
         return frozenset({item.title} - {"", None})
 
-    def _refresh_candidates(self, lib, targets):
-        """Match distinct scoped values before fetching any track models."""
+    def _candidate_finder(self, lib):
+        """Return find(scope) -> (items, matched names); the name index is lazy."""
         from beets.autotag.distance import string_dist
 
         fields = ("artist", "artists") if self._scope() == "artist" else ("title",)
-        scopes = {self._scope_values(item) for item in targets.values()}
-        target_names = set().union(*scopes)
-        if not target_names:
-            return {scope: [] for scope in scopes}, 0
         fuzzy = self.config["fuzzy"].get(bool)
         bare_ascii = self.config["bare_ascii"].get(bool)
         threshold = self._number("fuzzy_thres") if fuzzy else 0.0
+        index = {}
 
-        library_names = {}
-        with lib.transaction() as tx:
-            for field in fields:
-                rows = tx.query(
-                    f"SELECT DISTINCT {field} FROM items "
-                    f"WHERE {field} IS NOT NULL AND {field} != ''"
-                )
-                for row in rows:
-                    value = row[field]
-                    names = (
-                        Item._fields["artists"].from_sql(value)
-                        if field == "artists"
-                        else [value]
+        def build():
+            library_names = {}
+            with lib.transaction() as tx:
+                for field in fields:
+                    rows = tx.query(
+                        f"SELECT DISTINCT {field} FROM items "
+                        f"WHERE {field} IS NOT NULL AND {field} != ''"
                     )
-                    for name in names:
-                        if name:
-                            library_names.setdefault(name, set()).add((field, value))
+                    for row in rows:
+                        value = row[field]
+                        names = (
+                            Item._fields["artists"].from_sql(value)
+                            if field == "artists"
+                            else [value]
+                        )
+                        for name in names:
+                            if name:
+                                library_names.setdefault(name, set()).add(
+                                    (field, value)
+                                )
+            exact_index = {}
+            bare_index = {}
+            for name in library_names:
+                exact_index.setdefault(name.casefold(), set()).add(name)
+                if bare_ascii:
+                    bare = self._bare(name)
+                    if bare:
+                        bare_index.setdefault(bare, set()).add(name)
+            plain, patterned = [], []
+            if fuzzy and rf_process is not None:
+                for name in library_names:
+                    form, needs_full = _fuzzy_form(name)
+                    if needs_full:
+                        patterned.append(name)
+                    else:
+                        plain.append((name, form))
+            else:
+                patterned = list(library_names)
+            index.update(
+                plain_names=[name for name, _ in plain],
+                plain_forms=[form for _, form in plain],
+                patterned=patterned,
+                library_names=library_names,
+                exact_index=exact_index,
+                bare_index=bare_index,
+            )
 
-        exact_index = {}
-        bare_index = {}
-        for name in library_names:
-            exact_index.setdefault(name.casefold(), set()).add(name)
-            if bare_ascii:
-                bare = self._bare(name)
-                if bare:
-                    bare_index.setdefault(bare, set()).add(name)
-        matches = {}
-        matched_names = set()
-        for name in target_names:
-            names = set(exact_index.get(name.casefold(), ()))
-            if bare_ascii:
-                names.update(bare_index.get(self._bare(name), ()))
-            if fuzzy:
-                for other in library_names:
-                    if string_dist(name, other) <= threshold:
-                        names.add(other)
-            matched_names.update(names)
-            matches[name] = set().union(*(library_names[other] for other in names))
+        def fuzzy_matches(name):
+            form, needs_full = _fuzzy_form(name)
+            if rf_process is None or needs_full:
+                candidates = index["plain_names"] + index["patterned"]
+                return [o for o in candidates if string_dist(name, o) <= threshold]
+            found = [
+                index["plain_names"][position]
+                for _, _, position in rf_process.extract(
+                    form, index["plain_forms"],
+                    scorer=Levenshtein.normalized_distance,
+                    score_cutoff=threshold, limit=None,
+                )
+            ]
+            found.extend(o for o in index["patterned"] if string_dist(name, o) <= threshold)
+            return found
 
-        candidates = {}
-        for scope in scopes:
-            values = sorted(set().union(*(matches[name] for name in scope)))
+        def find(scope):
+            if not scope:
+                return [], set()
+            if not index:
+                build()
+            library_names = index["library_names"]
+            matched_names = set()
+            matches = set()
+            for name in scope:
+                names = set(index["exact_index"].get(name.casefold(), ()))
+                if bare_ascii:
+                    names.update(index["bare_index"].get(self._bare(name), ()))
+                if fuzzy:
+                    names.update(fuzzy_matches(name))
+                matched_names.update(names)
+                for other in names:
+                    matches.update(library_names[other])
+            values = sorted(matches)
             selected = {}
             # Bound SQL parameters and expression size for large matching batches.
             for start in range(0, len(values), 200):
@@ -726,8 +791,39 @@ class SimilarityPlugin(BeetsPlugin):
                     ]
                 )
                 selected.update((item.id, item) for item in lib.items(query))
-            candidates[scope] = list(selected.values())
+            return list(selected.values()), matched_names
+
+        return find
+
+    def _refresh_candidates(self, lib, targets):
+        """Match distinct scoped values before fetching any track models."""
+        find = self._candidate_finder(lib)
+        candidates = {}
+        matched_names = set()
+        for scope in {self._scope_values(item) for item in targets.values()}:
+            candidates[scope], matched = find(scope)
+            matched_names.update(matched)
         return candidates, len(matched_names)
+
+    def _scoped_plan(self, lib, items):
+        """Yield (item, candidates), resolving each distinct scope on demand."""
+        find = self._candidate_finder(lib)
+        ordered = sorted(
+            items, key=lambda i: (sorted(self._scope_values(i)), i.id)
+        )
+        for scope, group in itertools.groupby(ordered, key=self._scope_values):
+            candidates, _ = find(scope)
+            for item in group:
+                yield item, candidates
+
+    @staticmethod
+    def _eta(started, done, total):
+        elapsed = time.monotonic() - started
+        remaining = elapsed / done * (total - done) if done else 0
+        return (
+            f"elapsed {datetime.timedelta(seconds=int(elapsed))}, "
+            f"ETA {datetime.timedelta(seconds=int(remaining))}"
+        )
 
     def refresh_items(self, lib, items):
         """Refresh incident scoped pairs once per batch, preserving overrides."""
@@ -768,17 +864,25 @@ class SimilarityPlugin(BeetsPlugin):
             total, len(targets), name_count, matched_name_count,
         )
         progress = 0
-        for index, first in enumerate(targets.values(), 1):
-            self._log.info("Item {}/{}: {}", index, len(targets), first.id)
+        started = time.monotonic()
+        # Ascending IDs: a targeted pair is always scored under its lower item.
+        for index, first in enumerate(sorted(targets.values(), key=lambda i: i.id), 1):
+            scores = []
             for second in matching_items(first):
                 progress += 1
-                store.put(
+                scores.append((
                     first.id, second.id,
                     self.score(first, second, progress=(progress, total)),
-                )
-        if use_refresh_state:
-            for item in targets.values():
-                store.set_refresh_signature(item.id, self._refresh_signature(item))
+                ))
+            signatures = (
+                [(first.id, self._refresh_signature(first))] if use_refresh_state else []
+            )
+            store.save(scores, signatures)
+            self._log.info(
+                "Item {}/{}: {} ({} pairs saved, {})",
+                index, len(targets), first.id, len(scores),
+                self._eta(started, index, len(targets)),
+            )
 
     def _refresh_signature(self, item):
         fields = REFRESH_FIELDS

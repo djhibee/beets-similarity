@@ -112,7 +112,10 @@ without threshold filtering.
 
 ### Manual decisions
 
-Associating a pair adds the bonus needed to reach similarity `1`. Dissociating
+Associating a pair adds `associate_bonus` to the base score, capped at `0.99`
+(never lowering a higher base score). The default `to-perfect` computes the bonus
+dynamically so the effective score is `0.99`, leaving room for a real perfect
+match to rank above it; a number in `[0, 1]` adds that fixed bonus. Dissociating
 subtracts `dissociate_penalty` from the base score, with a floor of `0`; the
 base computed score is retained. The default `to-zero` value uses the base score
 itself as the penalty, preserving the previous behavior. These decisions
@@ -132,6 +135,7 @@ similarity:
   threshold: 0.8
   acoustic: yes
   dissociate_penalty: to-zero
+  associate_bonus: to-perfect
   warn_items: 1000
   warn_pairs: 500000
   scope: title
@@ -303,7 +307,8 @@ computing new ones. Consumers control rating prompts, asynchronous review, and
 quality tie-breaking;
 The `similarity` SQL table stores `item_a < item_b`, base `score`, and `manual`
 (`-1` dissociated, `0` automatic, `1` associated); effective similarity is
-`1` for associated pairs, `max(0, score - dissociate_penalty)` for dissociated
+`min(0.99, score + associate_bonus)` (or `0.99` for `to-perfect`) for associated
+pairs, `max(0, score - dissociate_penalty)` for dissociated
 pairs, and `score` otherwise. Set `dissociate_penalty` to a number in `[0, 1]`
 to subtract a fixed penalty, or `to-zero` to use each pair's base score as the
 penalty and force its effective score to `0`.

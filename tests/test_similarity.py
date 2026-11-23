@@ -34,6 +34,7 @@ class SimilarityTest(unittest.TestCase):
                 "threshold": 0.8,
                 "acoustic": True,
                 "dissociate_penalty": "to-zero",
+                "associate_bonus": "to-perfect",
                 "weights": dict(DEFAULT_WEIGHTS),
                 "warn_items": 1000,
                 "warn_pairs": 500000,
@@ -397,15 +398,27 @@ class SimilarityTest(unittest.TestCase):
         second = self.item(path="/music/second.flac")
         self.command("--associate", os.fsdecode(first.path), os.fsdecode(second.path))
         self.store.put(first.id, second.id, 0.1)
-        self.assertEqual(effective_score(self.store.get(first.id, second.id)), 1)
+        self.assertEqual(effective_score(self.store.get(first.id, second.id)), 0.99)
         self.assertEqual(
-            [(item.id, score) for item, score in self.plugin.similar_items(self.lib, first, 1)],
-            [(second.id, 1)],
+            [(item.id, score) for item, score in self.plugin.similar_items(self.lib, first, 0.99)],
+            [(second.id, 0.99)],
         )
         self.command("--dissociate", "--id", str(first.id), str(second.id), "--force")
         self.store.put(first.id, second.id, 1)
         self.assertEqual(effective_score(self.store.get(first.id, second.id)), 0)
         self.assertEqual(self.plugin.similar_items(self.lib, first, 0.01), [])
+
+    def test_associate_bonus_is_numeric_capped_and_validated(self):
+        row = {"manual": 1, "score": 0.5}
+        self.assertAlmostEqual(effective_score(row, "to-zero", 0.2), 0.7)
+        self.assertEqual(effective_score(row, "to-zero", 0.9), 0.99)
+        self.assertEqual(effective_score({"manual": 1, "score": 1.0}), 1.0)
+        for value in ("bad", True, -0.1, 1.5):
+            self.plugin.config["associate_bonus"] = value
+            with self.assertRaisesRegex(ui.UserError, "associate_bonus"):
+                self.plugin._associate_bonus()
+        self.plugin.config["associate_bonus"] = 0.2
+        self.assertEqual(self.plugin._associate_bonus(), 0.2)
 
     def test_manual_association_accepts_ids_with_flag(self):
         first, second = self.item(), self.item()

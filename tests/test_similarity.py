@@ -427,20 +427,20 @@ class SimilarityTest(unittest.TestCase):
             ):
                 self.plugin._dissociate_penalty()
 
-    def test_query_scopes_add_and_overwrite_confirmation(self):
+    def test_query_scopes_add_and_skips_existing_pairs(self):
         self.plugin.config["scope"] = "artist"
         first, second = self.item(), self.item()
         third = self.item(artist="Toto")
         self.command("--add", "-f", "artist:Daft Punk")
         self.assertIsNotNone(self.store.get(first.id, second.id))
         self.assertIsNone(self.store.get(first.id, third.id))
-        with patch.object(self.plugin, "_confirm", return_value=False) as confirm:
-            with patch.object(self.plugin, "score") as score:
-                self.command("--add", "artist:Daft Punk")
-            confirm.assert_called_once()
-            score.assert_not_called()
+        # Plain --add skips stored pairs without prompting; -f recomputes them.
         with patch.object(self.plugin, "_confirm", side_effect=AssertionError):
-            self.command("--add", "-f", "artist:Daft Punk")
+            with patch.object(self.plugin, "score", return_value=0.9) as score:
+                self.command("--add", "artist:Daft Punk")
+                score.assert_not_called()
+                self.command("--add", "-f", "artist:Daft Punk")
+                score.assert_called()
 
     def test_scoped_add_includes_matching_items_outside_query(self):
         self.plugin.config["scope"] = "artist"

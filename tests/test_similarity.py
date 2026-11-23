@@ -177,7 +177,7 @@ class SimilarityTest(unittest.TestCase):
         self.assertAlmostEqual(sum(args[-1] for args in penalties), 1 - score)
         forward = {args[3]: args for args in penalties if args[1] == first.id}
         reverse = {args[3]: args for args in penalties if args[1] == second.id}
-        self.assertEqual(set(forward), set(DEFAULT_WEIGHTS) - {"data_source"})
+        self.assertEqual(set(forward), set(DEFAULT_WEIGHTS))
         self.assertNotIn("track_id", reverse)
         self.assertIn("'Around the World' vs 'Another Track'", forward["track_title"][4])
         self.assertEqual(forward["track_length"][4], "length: 429.0 vs 80")

@@ -31,7 +31,6 @@ DEFAULT_WEIGHTS = {
     "album": 2.0,
     "release_group": 6.0,
     "acoustic": 8.0,
-    "data_source": 0.0,
 }
 
 REFRESH_FIELDS = (
@@ -374,6 +373,8 @@ class SimilarityPlugin(BeetsPlugin):
         }
         if any(not math.isfinite(w) or w < 0 for w in weights.values()):
             raise ui.UserError("similarity weights must be finite and nonnegative")
+        # beets may add a data_source penalty; it never counts for similarity.
+        weights["data_source"] = 0.0
         release_track = first.get("mb_releasetrackid")
         if release_track and release_track == second.get("mb_releasetrackid"):
             self._log.debug(

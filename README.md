@@ -148,7 +148,6 @@ similarity:
     album: 2.0
     release_group: 6.0 #mb_releasegroupid penalty
     acoustic: 8.0
-    data_source: 0.0
 ```
 
 Weights must be finite and nonnegative; at least one applicable weight must be

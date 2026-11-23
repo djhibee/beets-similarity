@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "beets-similarity"
-version = "1.1.0"
+version = "1.2.0"
 description = "Persistent local-track similarity using the beets autotagger"
 readme = "README.md"
 requires-python = ">=3.12"

@@ -78,11 +78,19 @@ def pair_key(first, second):
     return tuple(sorted((int(first), int(second))))
 
 
-def effective_score(row, dissociate_penalty="to-zero"):
+ASSOCIATE_CAP = 0.99
+
+
+def effective_score(row, dissociate_penalty="to-zero", associate_bonus="to-perfect"):
     """Manual choices survive recomputation and any valid threshold change."""
     if row["manual"]:
         if row["manual"] > 0:
-            return 1.0
+            # Never lower a genuinely higher score, so real perfect matches win.
+            bonus = (
+                ASSOCIATE_CAP if associate_bonus == "to-perfect"
+                else row["score"] + associate_bonus
+            )
+            return max(row["score"], min(ASSOCIATE_CAP, bonus))
         penalty = row["score"] if dissociate_penalty == "to-zero" else dissociate_penalty
         return max(0.0, row["score"] - penalty)
     return row["score"]
@@ -222,6 +230,7 @@ class SimilarityPlugin(BeetsPlugin):
                 "threshold": 0.8,
                 "acoustic": True,
                 "dissociate_penalty": "to-zero",
+                "associate_bonus": "to-perfect",
                 "weights": DEFAULT_WEIGHTS,
                 "warn_items": 1000,
                 "warn_pairs": 500000,
@@ -249,6 +258,21 @@ class SimilarityPlugin(BeetsPlugin):
         if not math.isfinite(value) or not 0 < value <= 1:
             raise ui.UserError("similarity threshold must be greater than 0 and at most 1")
         return value
+
+    def _associate_bonus(self):
+        value = self.config["associate_bonus"].get()
+        if value == "to-perfect":
+            return value
+        message = 'similarity.associate_bonus must be a number in [0, 1] or "to-perfect"'
+        if isinstance(value, (str, bool)):
+            raise ui.UserError(message)
+        try:
+            bonus = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ui.UserError(message) from exc
+        if not math.isfinite(bonus) or not 0 <= bonus <= 1:
+            raise ui.UserError(message)
+        return bonus
 
     def _dissociate_penalty(self):
         value = self.config["dissociate_penalty"].get()
@@ -426,9 +450,10 @@ class SimilarityPlugin(BeetsPlugin):
         """Public API for rating/playlist plugins: (Item, score), best first."""
         threshold = self._threshold(threshold)
         penalty = self._dissociate_penalty()
+        bonus = self._associate_bonus()
         results = []
         for row in SimilarityStore(lib).neighbors(item.id):
-            score = effective_score(row, penalty)
+            score = effective_score(row, penalty, bonus)
             if score >= threshold:
                 other_id = (
                     row["item_b"] if row["item_a"] == item.id else row["item_a"]
@@ -656,6 +681,7 @@ class SimilarityPlugin(BeetsPlugin):
     def _list(self, lib, store, items, threshold, matrix, debug):
         labels = {item.id: self._label(item, debug) for item in items}
         penalty = self._dissociate_penalty()
+        bonus = self._associate_bonus()
         if matrix:
             label_width = max((len(label) for label in labels.values()), default=0)
             column_width = max(8, label_width)
@@ -664,7 +690,7 @@ class SimilarityPlugin(BeetsPlugin):
                 for row in store.neighbors(item.id):
                     other = row["item_b"] if row["item_a"] == item.id else row["item_a"]
                     if other in labels:
-                        score = effective_score(row, penalty)
+                        score = effective_score(row, penalty, bonus)
                         matrix_scores[item.id][other] = score
                         matrix_scores[other][item.id] = score
             ui.print_(
@@ -693,7 +719,7 @@ class SimilarityPlugin(BeetsPlugin):
                         if other_item:
                             labels[other] = self._label(other_item, debug)
                     if other in labels:
-                        score = effective_score(row, penalty)
+                        score = effective_score(row, penalty, bonus)
                         if score >= threshold:
                             scores[other] = score
                 if debug:

@@ -53,8 +53,8 @@ tracks are refreshed; it does not limit their matching candidates.
 `--add --matrix` however define a all-pairs behavior, computing every unordered pair
 within the matched query. All normal beets track queries work. An empty query
 selects all tracks. 
-Overwriting scores, changing an existing manual choice, and
-removing scores require confirmation unless `-f`/`--force` is supplied.
+Changing an existing manual choice and removing scores require confirmation
+unless `-f`/`--force` is supplied. Plain `--add` skips stored pairs; `-f` recomputes them.
 Refreshes preserve manual choices; remove the pair's scores first to clear a
 manual choice. Scoped removal deletes all pairs touching the selected tracks,
 including pairs with tracks outside the query. Full reset clears all similarity

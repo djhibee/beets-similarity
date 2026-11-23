@@ -31,7 +31,6 @@ DEFAULT_WEIGHTS = {
     "album": 2.0,
     "release_group": 6.0,
     "acoustic": 8.0,
-    "data_source": 0.0,
 }
 
 REFRESH_FIELDS = (
@@ -374,6 +373,8 @@ class SimilarityPlugin(BeetsPlugin):
         }
         if any(not math.isfinite(w) or w < 0 for w in weights.values()):
             raise ui.UserError("similarity weights must be finite and nonnegative")
+        # beets may add a data_source penalty; it never counts for similarity.
+        weights["data_source"] = 0.0
         release_track = first.get("mb_releasetrackid")
         if release_track and release_track == second.get("mb_releasetrackid"):
             self._log.debug(
@@ -482,7 +483,41 @@ class SimilarityPlugin(BeetsPlugin):
         parser.add_option("--debug", action="store_true", default=False)
         parser.add_option("--thres", type="float", help="minimum similarity (0, 1]")
         command.func = self._command
-        return [command]
+        explain = ui.Subcommand(
+            "similarity", help="similarity debugging helpers: similarity explain QUERY"
+        )
+        explain.func = self._explain_command
+        return [command, explain]
+
+    EXPLAIN_FIELDS = (
+        ("track_title", "title"),
+        ("track_artist", "artist"),
+        ("track_length", "length"),
+        ("track_id", "mb_trackid"),
+        ("track_index", "track"),
+        ("medium", "disc"),
+        ("album", "album"),
+        ("release_group", "mb_releasegroupid"),
+    )
+
+    def explain_format(self):
+        """Build a `beet ls -f` format with the fields that influence scoring."""
+        weights = {key: self.config["weights"][key].as_number() for key in DEFAULT_WEIGHTS}
+        fields = ["id"]
+        if self.config["acoustic"].get(bool) and weights["acoustic"] > 0:
+            # The fingerprint is huge; its AcoustID is a readable stand-in.
+            fields.append("acoustid_id")
+        fields += [field for key, field in self.EXPLAIN_FIELDS if weights[key] > 0]
+        # Identical release track ids short-circuit the score to 1.
+        fields.append("mb_releasetrackid")
+        return ";".join("$" + f for f in fields)
+
+    def _explain_command(self, lib, opts, args):
+        if len(args) < 2 or args[0] != "explain":
+            raise ui.UserError("usage: beet similarity explain QUERY")
+        fmt = self.explain_format()
+        for item in lib.items(args[1:]):
+            ui.print_(format(item, fmt))
 
     def _command(self, lib, opts, args):
         actions = [

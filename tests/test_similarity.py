@@ -74,6 +74,25 @@ class SimilarityTest(unittest.TestCase):
             command.func(self.lib, opts, query)
         return output.getvalue()
 
+    def test_explain_uses_only_weighted_fields(self):
+        self.plugin.config["weights"]["track_artist"] = 0
+        self.plugin.config["weights"]["album"] = 0
+        item = self.item()
+        fmt = self.plugin.explain_format()
+        self.assertEqual(
+            fmt.split(";")[:2], ["$id", "$acoustid_id"]
+        )
+        self.assertNotIn("$artist", fmt)
+        self.assertNotIn("$album;", fmt + ";")
+        self.plugin.config["acoustic"] = False
+        self.assertNotIn("acoustid_id", self.plugin.explain_format())
+        command = self.plugin.commands()[1]
+        opts, query = command.parser.parse_args(["explain", f"id:{item.id}"])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            command.func(self.lib, opts, query)
+        self.assertTrue(output.getvalue().startswith(f"{item.id};Around the World;"))
+
     def test_identical_and_bitrate_invariance(self):
         first = self.item(bitrate=128000)
         second = self.item(bitrate=320000)

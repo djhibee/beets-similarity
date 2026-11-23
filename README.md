@@ -43,6 +43,7 @@ beet similar --dissociate /dir1/path/item1 /dir2/path/item2
 beet similar --dissociate --id 12 34 -f
 beet similar --remove artist:"Toto"
 beet similar --remove                      # full reset, extra confirmation
+beet similarity explain title:"tutu"        # like beet ls -f, limited to fields with non-zero weights
 beet similar --size                        # similarity + refresh-state storage, in bytes
 ```
 
